@@ -168,7 +168,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Open a read-only live window for the private agent display"
     )
     parser.add_argument(
-        "--scale", type=float, default=0.65, help="Window scale; default 0.65"
+        "--scale", type=float, default=0.8, help="Window scale; default 0.8"
     )
     parser.add_argument(
         "--interval",
