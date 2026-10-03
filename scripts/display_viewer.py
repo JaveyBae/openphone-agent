@@ -43,25 +43,21 @@ class AgentDisplayViewer:
         self.running.set()
         self.frames: queue.Queue[Frame | Exception] = queue.Queue(maxsize=1)
         self.photo: ImageTk.PhotoImage | None = None
+        self.source_image: Image.Image | None = None
         self.last_digest: int | None = None
         self.last_frame_time: float | None = None
+        self.redraw_pending = False
+
+        target_width = max(216, round(720 * scale))
+        target_height = max(384, round(1280 * scale))
 
         root.title("OpenPhone · Agent Display")
         root.configure(background="#0f172a")
-        root.resizable(False, False)
+        root.geometry(f"{target_width}x{target_height + 36}")
+        root.minsize(270, 516)
+        root.resizable(True, True)
         root.attributes("-topmost", always_on_top)
         root.protocol("WM_DELETE_WINDOW", self.close)
-
-        self.canvas = tk.Label(
-            root,
-            text="Waiting for the private display…",
-            foreground="#cbd5e1",
-            background="#0f172a",
-            font=("Helvetica", 15),
-            width=max(1, int(720 * scale / 8)),
-            height=max(1, int(1280 * scale / 16)),
-        )
-        self.canvas.pack()
 
         self.status = tk.StringVar(value="Connecting…")
         status_bar = tk.Label(
@@ -74,7 +70,24 @@ class AgentDisplayViewer:
             background="#1e293b",
             font=("Menlo", 11),
         )
-        status_bar.pack(fill="x")
+        status_bar.pack(side="bottom", fill="x")
+
+        self.canvas = tk.Canvas(
+            root,
+            background="#0f172a",
+            highlightthickness=0,
+            borderwidth=0,
+        )
+        self.canvas.pack(side="top", fill="both", expand=True)
+        self.canvas.create_text(
+            target_width / 2,
+            target_height / 2,
+            text="Waiting for the private display…",
+            fill="#cbd5e1",
+            font=("Helvetica", 15),
+            tags=("waiting",),
+        )
+        root.bind("<Configure>", self.schedule_redraw)
 
         self.worker = threading.Thread(target=self.pull_frames, daemon=True)
         self.worker.start()
@@ -136,16 +149,10 @@ class AgentDisplayViewer:
         elif isinstance(latest, Frame):
             digest = hash(latest.payload)
             if digest != self.last_digest:
-                image = Image.open(io.BytesIO(latest.payload)).convert("RGB")
-                target = (
-                    max(1, round(image.width * self.scale)),
-                    max(1, round(image.height * self.scale)),
-                )
-                image = image.resize(target, Image.Resampling.LANCZOS)
-                self.photo = ImageTk.PhotoImage(image)
-                self.canvas.configure(image=self.photo, text="", width=target[0], height=target[1])
+                self.source_image = Image.open(io.BytesIO(latest.payload)).convert("RGB")
                 self.last_digest = digest
                 self.last_frame_time = latest.captured_at
+                self.draw_frame()
             age = (
                 0.0
                 if self.last_frame_time is None
@@ -158,6 +165,38 @@ class AgentDisplayViewer:
         if self.running.is_set():
             self.root.after(100, self.render_latest)
 
+    def schedule_redraw(self, _event: tk.Event[Any] | None = None) -> None:
+        if self.redraw_pending:
+            return
+        self.redraw_pending = True
+        self.root.after_idle(self.draw_frame)
+
+    def draw_frame(self) -> None:
+        self.redraw_pending = False
+        if self.source_image is None:
+            return
+        canvas_width = max(1, self.canvas.winfo_width())
+        canvas_height = max(1, self.canvas.winfo_height())
+        fit_scale = min(
+            canvas_width / self.source_image.width,
+            canvas_height / self.source_image.height,
+        )
+        target = (
+            max(1, round(self.source_image.width * fit_scale)),
+            max(1, round(self.source_image.height * fit_scale)),
+        )
+        rendered = self.source_image.resize(target, Image.Resampling.LANCZOS)
+        self.photo = ImageTk.PhotoImage(rendered)
+        self.canvas.delete("frame")
+        self.canvas.delete("waiting")
+        self.canvas.create_image(
+            canvas_width / 2,
+            canvas_height / 2,
+            image=self.photo,
+            anchor="center",
+            tags=("frame",),
+        )
+
     def close(self) -> None:
         self.running.clear()
         self.root.destroy()
@@ -168,7 +207,9 @@ def build_parser() -> argparse.ArgumentParser:
         description="Open a read-only live window for the private agent display"
     )
     parser.add_argument(
-        "--scale", type=float, default=0.8, help="Window scale; default 0.8"
+        "--scale",
+        default="auto",
+        help="Initial window scale (0.2–1.5) or auto; default auto",
     )
     parser.add_argument(
         "--interval",
@@ -182,15 +223,22 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
-    if not 0.2 <= args.scale <= 1.5:
-        raise SystemExit("--scale must be between 0.2 and 1.5")
     if not 0.2 <= args.interval <= 5:
         raise SystemExit("--interval must be between 0.2 and 5")
     root = tk.Tk()
+    if args.scale == "auto":
+        scale = min(0.8, max(0.4, (root.winfo_screenheight() - 140) / 1280))
+    else:
+        try:
+            scale = float(args.scale)
+        except ValueError as error:
+            raise SystemExit("--scale must be 'auto' or a number") from error
+        if not 0.2 <= scale <= 1.5:
+            raise SystemExit("--scale must be between 0.2 and 1.5")
     AgentDisplayViewer(
         root,
         locate_adb(),
-        args.scale,
+        scale,
         args.interval,
         args.always_on_top,
     )
