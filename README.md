@@ -69,6 +69,9 @@ python3 scripts/agent_loop.py \
   --goal "Open a harmless test page on the private display"
 ```
 
+For the server-hosted AutoGLM model and its separate integration boundary, see
+[n30285 deployment](docs/autoglm-n30285.md).
+
 Connect Ollama, LM Studio, llama.cpp, or another OpenAI-compatible service:
 
 ```bash
