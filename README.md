@@ -43,6 +43,13 @@ Open **OpenPhone Agent**, tap **Start agent display**, choose **Entire screen**,
 ./scripts/agentctl.sh capture
 ```
 
+Open the private display in a separate, read-only Mac window without affecting
+the phone owner's screen or input:
+
+```bash
+python3 scripts/display_viewer.py --always-on-top
+```
+
 Verify the complete loop without an API:
 
 ```bash
