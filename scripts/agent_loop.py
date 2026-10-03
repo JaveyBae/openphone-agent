@@ -418,6 +418,26 @@ class MockPlanner:
                 "reason": "Allow the page to finish rendering before verification",
                 "risk": "none",
             }
+        if len(history) == 2:
+            return {
+                "action": "swipe",
+                "arguments": {
+                    "x1": WIDTH // 2,
+                    "y1": 1050,
+                    "x2": WIDTH // 2,
+                    "y2": 430,
+                    "duration_ms": 500,
+                },
+                "reason": "Exercise display-scoped touch input on the rendered page",
+                "risk": "none",
+            }
+        if len(history) == 3:
+            return {
+                "action": "wait",
+                "arguments": {"seconds": 1},
+                "reason": "Capture stable post-swipe evidence",
+                "risk": "none",
+            }
         return {
             "action": "finish",
             "arguments": {"summary": "Private-display launch and observation loop completed"},
