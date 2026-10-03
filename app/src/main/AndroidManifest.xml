@@ -41,6 +41,15 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Keeps an agent-owned virtual display alive while the user continues using the primary display." />
         </service>
+
+        <receiver
+            android:name=".AgentResultReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="ai.openphone.agent.TASK_UPDATE" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

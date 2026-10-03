@@ -2,31 +2,62 @@ package ai.openphone.agent;
 
 import android.Manifest;
 import android.app.Activity;
-import android.media.projection.MediaProjectionManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.hardware.display.DisplayManager;
+import android.media.projection.MediaProjectionManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.Gravity;
 import android.view.View;
+import android.view.inputmethod.EditorInfo;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.LinearLayout;
-import android.widget.Space;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
+import org.json.JSONObject;
+
+import java.io.File;
+import java.io.FileWriter;
+import java.util.UUID;
+
+/** Main-screen chat UI. The private display remains an implementation detail. */
 public class MainActivity extends Activity {
     private static final int REQUEST_CAPTURE = 501;
-    private TextView statusText;
-    private TextView commandText;
+
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private TextView agentStatus;
+    private LinearLayout messages;
+    private ScrollView chatScroll;
+    private EditText taskInput;
+    private String pendingGoal;
+    private String renderedUpdate = "";
+    private String progressTaskId;
+    private TextView progressBubble;
+
+    private final Runnable resultPoller = new Runnable() {
+        @Override
+        public void run() {
+            renderLatestTaskUpdate();
+            handler.postDelayed(this, 600);
+        }
+    };
 
     private final BroadcastReceiver statusReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            refreshStatus(intent.getStringExtra(AgentDisplayService.EXTRA_MESSAGE));
+            refreshAgentStatus();
         }
     };
 
@@ -34,13 +65,18 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(buildUi());
+        addBubble(
+                "你好，我是 OpenPhone Agent。\n\n"
+                        + "你可以把任务直接告诉我。我会在后台的独立工作区执行，"
+                        + "你可以继续使用手机。",
+                false);
 
         if (Build.VERSION.SDK_INT >= 33
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
                 != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 7);
         }
-        refreshStatus(null);
+        refreshAgentStatus();
     }
 
     @Override
@@ -52,104 +88,212 @@ public class MainActivity extends Activity {
         } else {
             registerReceiver(statusReceiver, filter);
         }
-        refreshStatus(null);
+        handler.post(resultPoller);
+        refreshAgentStatus();
     }
 
     @Override
     protected void onStop() {
+        handler.removeCallbacks(resultPoller);
         unregisterReceiver(statusReceiver);
         super.onStop();
     }
 
     private View buildUi() {
-        int pad = dp(24);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(pad, dp(28), pad, pad);
-        root.setBackgroundColor(Color.rgb(248, 250, 252));
+        root.setBackgroundColor(Color.rgb(245, 247, 251));
 
-        TextView eyebrow = text("OPENPHONE LAB", 13, Color.rgb(37, 99, 235));
-        eyebrow.setLetterSpacing(0.12f);
-        root.addView(eyebrow);
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(dp(18), dp(12), dp(18), dp(12));
+        header.setBackgroundColor(Color.WHITE);
 
-        TextView title = text("Your screen stays yours.", 30, Color.rgb(15, 23, 42));
-        title.setPadding(0, dp(10), 0, dp(8));
-        root.addView(title);
+        TextView mark = text("◆", 24, Color.WHITE);
+        mark.setGravity(Gravity.CENTER);
+        mark.setBackground(rounded(Color.rgb(37, 99, 235), 14));
+        header.addView(mark, new LinearLayout.LayoutParams(dp(44), dp(44)));
 
-        TextView subtitle = text(
-                "This prototype gives the agent a separate Android display. "
-                        + "Its isolated browser can work there while you keep using this screen.",
-                16,
-                Color.rgb(71, 85, 105));
-        root.addView(subtitle);
+        LinearLayout titleBlock = new LinearLayout(this);
+        titleBlock.setOrientation(LinearLayout.VERTICAL);
+        titleBlock.setPadding(dp(12), 0, 0, 0);
+        TextView title = text("OpenPhone Agent", 18, Color.rgb(15, 23, 42));
+        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        titleBlock.addView(title);
+        agentStatus = text("正在检查后台工作区…", 12, Color.rgb(100, 116, 139));
+        titleBlock.addView(agentStatus);
+        header.addView(titleBlock, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
-        Space gap = new Space(this);
-        root.addView(gap, new LinearLayout.LayoutParams(1, dp(28)));
+        TextView privacy = text("私有屏", 12, Color.rgb(30, 64, 175));
+        privacy.setGravity(Gravity.CENTER);
+        privacy.setPadding(dp(10), dp(6), dp(10), dp(6));
+        privacy.setBackground(rounded(Color.rgb(239, 246, 255), 14));
+        header.addView(privacy);
+        root.addView(header, matchWrap());
 
-        statusText = text("Checking…", 18, Color.rgb(15, 23, 42));
-        statusText.setPadding(dp(18), dp(18), dp(18), dp(18));
-        statusText.setBackgroundColor(Color.WHITE);
-        root.addView(statusText, matchWrap());
+        chatScroll = new ScrollView(this);
+        chatScroll.setFillViewport(true);
+        messages = new LinearLayout(this);
+        messages.setOrientation(LinearLayout.VERTICAL);
+        messages.setPadding(dp(14), dp(18), dp(14), dp(18));
+        chatScroll.addView(messages, matchWrap());
+        root.addView(chatScroll, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        root.addView(button("Start agent display", v -> requestCapturePermission()));
-        root.addView(button("Open isolated agent browser",
-                v -> send(AgentDisplayService.ACTION_OPEN_BROWSER)));
-        root.addView(button("Refresh agent status", v -> refreshStatus(null)));
-        root.addView(button("Stop agent display", v -> send(AgentDisplayService.ACTION_STOP)));
+        LinearLayout composer = new LinearLayout(this);
+        composer.setOrientation(LinearLayout.HORIZONTAL);
+        composer.setGravity(Gravity.BOTTOM);
+        composer.setPadding(dp(12), dp(10), dp(12), dp(12));
+        composer.setBackgroundColor(Color.WHITE);
 
-        commandText = text("", 13, Color.rgb(71, 85, 105));
-        commandText.setPadding(0, dp(20), 0, 0);
-        root.addView(commandText);
+        taskInput = new EditText(this);
+        taskInput.setHint("告诉我你想完成什么…");
+        taskInput.setTextSize(15);
+        taskInput.setTextColor(Color.rgb(15, 23, 42));
+        taskInput.setHintTextColor(Color.rgb(148, 163, 184));
+        taskInput.setMinHeight(dp(52));
+        taskInput.setMaxLines(4);
+        taskInput.setPadding(dp(16), dp(10), dp(16), dp(10));
+        taskInput.setBackground(rounded(Color.rgb(241, 245, 249), 22));
+        taskInput.setImeOptions(EditorInfo.IME_ACTION_SEND);
+        taskInput.setOnEditorActionListener((view, actionId, event) -> {
+            if (actionId == EditorInfo.IME_ACTION_SEND) {
+                submitTypedTask();
+                return true;
+            }
+            return false;
+        });
+        composer.addView(taskInput, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
-        TextView footer = text(
-                "Prototype boundary: the Mac uses ADB for agent input. No root and no system-file changes.",
-                13,
-                Color.rgb(100, 116, 139));
-        LinearLayout.LayoutParams footerParams = matchWrap();
-        footerParams.weight = 1;
-        footerParams.gravity = Gravity.BOTTOM;
-        root.addView(footer, footerParams);
+        Button sendButton = new Button(this);
+        sendButton.setText("↑");
+        sendButton.setTextSize(22);
+        sendButton.setTextColor(Color.WHITE);
+        sendButton.setAllCaps(false);
+        sendButton.setBackground(rounded(Color.rgb(37, 99, 235), 26));
+        sendButton.setOnClickListener(v -> submitTypedTask());
+        LinearLayout.LayoutParams sendParams = new LinearLayout.LayoutParams(dp(54), dp(54));
+        sendParams.leftMargin = dp(8);
+        composer.addView(sendButton, sendParams);
+        root.addView(composer, matchWrap());
         return root;
     }
 
-    private Button button(String label, View.OnClickListener listener) {
-        Button button = new Button(this);
-        button.setText(label);
-        button.setTextSize(15);
-        button.setAllCaps(false);
-        button.setOnClickListener(listener);
-        LinearLayout.LayoutParams params = matchWrap();
-        params.topMargin = dp(12);
-        button.setLayoutParams(params);
-        return button;
-    }
-
-    private TextView text(String value, int sizeSp, int color) {
-        TextView view = new TextView(this);
-        view.setText(value);
-        view.setTextSize(sizeSp);
-        view.setTextColor(color);
-        view.setLineSpacing(0, 1.15f);
-        return view;
-    }
-
-    private LinearLayout.LayoutParams matchWrap() {
-        return new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT);
-    }
-
-    private int dp(int value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
-    }
-
-    private void send(String action) {
-        Intent intent = new Intent(this, AgentDisplayService.class).setAction(action);
-        if (AgentDisplayService.ACTION_STOP.equals(action)) {
-            startService(intent);
-        } else {
-            startForegroundService(intent);
+    private void submitTypedTask() {
+        String goal = taskInput.getText().toString().trim();
+        if (goal.isEmpty()) {
+            return;
         }
+        taskInput.setText("");
+        addBubble(goal, true);
+        if (!isAgentDisplayAlive()) {
+            pendingGoal = goal;
+            addBubble("首次使用需要开启后台工作区。请在系统弹窗中选择“整个屏幕”并点击“开始”。", false);
+            requestCapturePermission();
+            return;
+        }
+        enqueueTask(goal);
+    }
+
+    private void enqueueTask(String goal) {
+        String taskId = UUID.randomUUID().toString();
+        try {
+            File directory = new File(getFilesDir(), "chat");
+            if (!directory.exists() && !directory.mkdirs()) {
+                throw new IllegalStateException("Could not create chat directory");
+            }
+            JSONObject task = new JSONObject()
+                    .put("id", taskId)
+                    .put("goal", goal)
+                    .put("createdAt", System.currentTimeMillis());
+            File temp = new File(directory, "pending.tmp");
+            File target = new File(directory, "pending.json");
+            try (FileWriter writer = new FileWriter(temp)) {
+                writer.write(task.toString(2));
+                writer.write("\n");
+            }
+            if (!temp.renameTo(target)) {
+                throw new IllegalStateException("Could not publish task");
+            }
+            progressTaskId = taskId;
+            progressBubble = addBubble("已收到任务，正在等待 Agent 开始…", false);
+        } catch (Exception error) {
+            addBubble("任务提交失败：" + error.getMessage(), false);
+        }
+    }
+
+    private void renderLatestTaskUpdate() {
+        SharedPreferences prefs = getSharedPreferences(
+                AgentResultReceiver.PREFS, MODE_PRIVATE);
+        String taskId = prefs.getString(AgentResultReceiver.KEY_TASK_ID, "");
+        String status = prefs.getString(AgentResultReceiver.KEY_STATUS, "");
+        String message = prefs.getString(AgentResultReceiver.KEY_MESSAGE, "");
+        String fingerprint = taskId + "|" + status + "|" + message;
+        if (taskId.isEmpty() || fingerprint.equals(renderedUpdate)) {
+            return;
+        }
+        renderedUpdate = fingerprint;
+        if (!taskId.equals(progressTaskId) || progressBubble == null) {
+            progressTaskId = taskId;
+            progressBubble = addBubble(message, false);
+            return;
+        }
+        String prefix;
+        switch (status) {
+            case "completed": prefix = "✓ "; break;
+            case "failed": prefix = "⚠ "; break;
+            case "needs_user": prefix = "需要你确认："; break;
+            default: prefix = ""; break;
+        }
+        progressBubble.setText(prefix + message);
+        scrollToBottom();
+    }
+
+    private TextView addBubble(String value, boolean fromUser) {
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(fromUser ? Gravity.END : Gravity.START);
+        row.setPadding(0, dp(5), 0, dp(5));
+
+        TextView bubble = text(value, 15,
+                fromUser ? Color.WHITE : Color.rgb(30, 41, 59));
+        bubble.setLineSpacing(0, 1.15f);
+        bubble.setPadding(dp(15), dp(12), dp(15), dp(12));
+        bubble.setMaxWidth((int) (getResources().getDisplayMetrics().widthPixels * 0.82f));
+        bubble.setBackground(rounded(
+                fromUser ? Color.rgb(37, 99, 235) : Color.WHITE, 18));
+        row.addView(bubble);
+        messages.addView(row, matchWrap());
+        scrollToBottom();
+        return bubble;
+    }
+
+    private void scrollToBottom() {
+        chatScroll.post(() -> chatScroll.fullScroll(View.FOCUS_DOWN));
+    }
+
+    private void refreshAgentStatus() {
+        if (isAgentDisplayAlive()) {
+            int id = getSharedPreferences(AgentDisplayService.PREFS, MODE_PRIVATE)
+                    .getInt(AgentDisplayService.KEY_DISPLAY_ID, -1);
+            agentStatus.setText("● 后台 Agent 已就绪 · Display " + id);
+            agentStatus.setTextColor(Color.rgb(22, 163, 74));
+        } else {
+            agentStatus.setText("○ 发送首个任务时开启后台 Agent");
+            agentStatus.setTextColor(Color.rgb(100, 116, 139));
+        }
+    }
+
+    private boolean isAgentDisplayAlive() {
+        int id = getSharedPreferences(AgentDisplayService.PREFS, MODE_PRIVATE)
+                .getInt(AgentDisplayService.KEY_DISPLAY_ID, -1);
+        if (id < 0) {
+            return false;
+        }
+        DisplayManager manager = getSystemService(DisplayManager.class);
+        return manager != null && manager.getDisplay(id) != null;
     }
 
     private void requestCapturePermission() {
@@ -165,7 +309,8 @@ public class MainActivity extends Activity {
             return;
         }
         if (resultCode != RESULT_OK || data == null) {
-            refreshStatus("Screen-capture permission was not granted");
+            addBubble("后台工作区未开启，任务已暂停。", false);
+            pendingGoal = null;
             return;
         }
         Intent service = new Intent(this, AgentDisplayService.class)
@@ -173,20 +318,38 @@ public class MainActivity extends Activity {
                 .putExtra(AgentDisplayService.EXTRA_RESULT_CODE, resultCode)
                 .putExtra(AgentDisplayService.EXTRA_PROJECTION_DATA, data);
         startForegroundService(service);
+        handler.postDelayed(() -> {
+            refreshAgentStatus();
+            if (pendingGoal != null && isAgentDisplayAlive()) {
+                String goal = pendingGoal;
+                pendingGoal = null;
+                enqueueTask(goal);
+            }
+        }, 1200);
     }
 
-    private void refreshStatus(String message) {
-        int id = getSharedPreferences(AgentDisplayService.PREFS, MODE_PRIVATE)
-                .getInt(AgentDisplayService.KEY_DISPLAY_ID, -1);
-        String stored = getSharedPreferences(AgentDisplayService.PREFS, MODE_PRIVATE)
-                .getString(AgentDisplayService.KEY_STATUS, "Stopped");
-        String shown = message != null ? message : stored;
-        statusText.setText(id >= 0
-                ? "Agent display is running\nDisplay " + id + " · 720 × 1280\n" + shown
-                : "Agent display is stopped\n" + shown);
-        commandText.setText(id >= 0
-                ? "ADB target: display " + id + "\n"
-                    + "Mac controller: ./scripts/agentctl.sh open-browser"
-                : "Start the display, then launch the isolated browser into it.");
+    private TextView text(String value, int sizeSp, int color) {
+        TextView view = new TextView(this);
+        view.setText(value);
+        view.setTextSize(sizeSp);
+        view.setTextColor(color);
+        return view;
+    }
+
+    private GradientDrawable rounded(int color, int radiusDp) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(color);
+        drawable.setCornerRadius(dp(radiusDp));
+        return drawable;
+    }
+
+    private LinearLayout.LayoutParams matchWrap() {
+        return new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+    }
+
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
     }
 }

@@ -14,6 +14,8 @@ flowchart LR
 
 ## What works
 
+- Provides a GPT-style chat screen where the owner can submit a natural-language task.
+- Bridges chat tasks to the host-side agent and returns live progress/results to the conversation.
 - Creates a `720×1280` touch-capable virtual display in a foreground service.
 - Keeps the main display available to the user.
 - Runs an app-owned browser task on the agent display, isolated from the owner's Chrome task.
@@ -49,6 +51,15 @@ the phone owner's screen or input:
 ```bash
 python3 scripts/display_viewer.py --always-on-top
 ```
+
+Run the chat-to-agent bridge (mock mode needs no API key):
+
+```bash
+python3 scripts/chat_bridge.py --provider mock
+```
+
+Then type a task in the Android app. For a real vision model, set the API
+environment variables below and start the bridge with `--provider openai`.
 
 Verify the complete loop without an API:
 
