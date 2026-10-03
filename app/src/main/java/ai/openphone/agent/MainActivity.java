@@ -78,7 +78,7 @@ public class MainActivity extends Activity {
 
         TextView subtitle = text(
                 "This prototype gives the agent a separate Android display. "
-                        + "Chrome can work there while you keep using this screen.",
+                        + "Its isolated browser can work there while you keep using this screen.",
                 16,
                 Color.rgb(71, 85, 105));
         root.addView(subtitle);
@@ -92,6 +92,8 @@ public class MainActivity extends Activity {
         root.addView(statusText, matchWrap());
 
         root.addView(button("Start agent display", v -> requestCapturePermission()));
+        root.addView(button("Open isolated agent browser",
+                v -> send(AgentDisplayService.ACTION_OPEN_BROWSER)));
         root.addView(button("Refresh agent status", v -> refreshStatus(null)));
         root.addView(button("Stop agent display", v -> send(AgentDisplayService.ACTION_STOP)));
 
@@ -184,7 +186,7 @@ public class MainActivity extends Activity {
                 : "Agent display is stopped\n" + shown);
         commandText.setText(id >= 0
                 ? "ADB target: display " + id + "\n"
-                    + "Mac controller: ./scripts/agentctl.sh open-chrome"
-                : "Start the display, then launch Chrome into it.");
+                    + "Mac controller: ./scripts/agentctl.sh open-browser"
+                : "Start the display, then launch the isolated browser into it.");
     }
 }

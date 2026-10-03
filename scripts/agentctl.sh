@@ -25,10 +25,15 @@ display_id() {
 }
 
 require_display() {
-  local id
+  local id displays
   id="$(display_id)"
   if [[ -z "$id" || "$id" == "-1" ]]; then
     echo "Agent display is not running. Open the app and tap Start agent display." >&2
+    exit 1
+  fi
+  displays="$("$ADB" shell cmd display get-displays 2>/dev/null)"
+  if [[ "$displays" != *"Display id $id:"* ]]; then
+    echo "Agent display $id no longer exists. Open the app and tap Start agent display again." >&2
     exit 1
   fi
   printf '%s' "$id"
@@ -38,13 +43,13 @@ case "${1:-help}" in
   state)
     state
     ;;
-  open-chrome)
+  open-browser|open-chrome)
     id="$(require_display)"
-    url="${2:-https://example.com}"
+    url="${2:-https://www.wikipedia.org/}"
     "$ADB" shell am start \
       --display "$id" \
-      --activity-multiple-task \
-      -n com.android.chrome/com.google.android.apps.chrome.Main \
+      --activity-clear-top \
+      -n "$PACKAGE/.AgentBrowserActivity" \
       -a android.intent.action.VIEW \
       -d "$url"
     ;;
@@ -77,7 +82,8 @@ case "${1:-help}" in
 Usage: ./scripts/agentctl.sh COMMAND
 
   state                         Show display ID and status
-  open-chrome [URL]             Launch Chrome on the agent display
+  open-browser [URL]            Launch the isolated browser on the agent display
+  open-chrome [URL]             Backward-compatible alias for open-browser
   tap X Y                       Tap only the agent display
   swipe X1 Y1 X2 Y2 [DURATION] Swipe only the agent display
   text TEXT                     Type on the agent display

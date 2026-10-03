@@ -8,7 +8,7 @@ flowchart LR
     A -->|MediaProjection + ImageReader| V[Agent Display]
     M[Agent loop on Mac / PC] -->|launch + input -d ID| V
     L[Local or cloud model API] -->|one safe JSON action| M
-    V --> C[Chrome / compatible apps]
+    V --> C[Isolated in-app browser / compatible apps]
     V -->|fresh screenshot after each action| M
 ```
 
@@ -16,7 +16,7 @@ flowchart LR
 
 - Creates a `720×1280` touch-capable virtual display in a foreground service.
 - Keeps the main display available to the user.
-- Launches Chrome on the agent display through ADB.
+- Runs an app-owned browser task on the agent display, isolated from the owner's Chrome task.
 - Routes taps/swipes/text to the agent display ID only.
 - Captures the agent display to `files/display/latest.png` for visual reasoning.
 - Runs an AndyClaw-style observe/act loop against any OpenAI-compatible model API.
@@ -38,7 +38,7 @@ Open **OpenPhone Agent**, tap **Start agent display**, choose **Entire screen**,
 
 ```bash
 ./scripts/agentctl.sh state
-./scripts/agentctl.sh open-chrome https://example.com
+./scripts/agentctl.sh open-browser https://www.wikipedia.org/
 ./scripts/agentctl.sh tap 670 55
 ./scripts/agentctl.sh capture
 ```
@@ -84,4 +84,4 @@ the screenshot used for every decision. The API key is never written to the run 
 
 ## Current boundary
 
-Android does not let an ordinary app place another package on a chosen display. The host controller performs that privileged launch through an already-authorized ADB connection. A text-only model will need a future Accessibility-tree adapter; the current model loop uses screenshots and therefore expects vision input. Sensitive steps such as passwords and payments always remain user-confirmed.
+Android does not let an ordinary app reliably keep an arbitrary third-party app on a chosen display. Some apps, including Chrome, reuse one task and can migrate it back to display 0 when the owner opens the same app. The demo therefore uses an app-owned WebView activity with a separate task affinity; the host controller places that task through an already-authorized ADB connection. A text-only model will need a future Accessibility-tree adapter; the current model loop uses screenshots and therefore expects vision input. Sensitive steps such as passwords and payments always remain user-confirmed.

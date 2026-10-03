@@ -170,6 +170,12 @@ class AndroidController:
         display_id = int(self.state().get("displayId", -1))
         if display_id < 0:
             raise AgentError("agent display is stopped; tap Start agent display in the app")
+        raw = self._run("shell", "cmd", "display", "get-displays")
+        if f"Display id {display_id}:" not in str(raw):
+            raise AgentError(
+                f"agent display {display_id} no longer exists; "
+                "tap Start agent display in the app again"
+            )
         return display_id
 
     def package_displays(self, package: str) -> set[int]:
@@ -221,22 +227,21 @@ class AndroidController:
             url = require_string(arguments, "url")
             if not re.match(r"^https?://", url):
                 raise AgentError("open_url accepts only http/https URLs")
-            self.require_package_off_owner_display("com.android.chrome", display_id)
             self._run(
                 "shell",
                 "am",
                 "start",
                 "--display",
                 str(display_id),
-                "--activity-multiple-task",
+                "--activity-clear-top",
                 "-n",
-                "com.android.chrome/com.google.android.apps.chrome.Main",
+                f"{PACKAGE}/.AgentBrowserActivity",
                 "-a",
                 "android.intent.action.VIEW",
                 "-d",
                 url,
             )
-            self.verify_package_on_agent_display("com.android.chrome", display_id)
+            self.verify_package_on_agent_display(PACKAGE, display_id)
         elif name == "launch_app":
             package = require_string(arguments, "package")
             if not re.fullmatch(r"[A-Za-z0-9_.]+", package):

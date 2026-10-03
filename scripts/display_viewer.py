@@ -110,6 +110,11 @@ class AgentDisplayViewer:
         display_id = int(state.get("displayId", -1))
         if display_id < 0:
             raise RuntimeError("Agent display is stopped; tap Start agent display")
+        displays = self.adb_run("shell", "cmd", "display", "get-displays")
+        if f"Display id {display_id}:".encode() not in displays:
+            raise RuntimeError(
+                f"Agent display {display_id} expired; tap Start agent display again"
+            )
         return display_id
 
     def pull_frames(self) -> None:

@@ -23,6 +23,16 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".AgentBrowserActivity"
+            android:documentLaunchMode="never"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:permission="android.permission.DUMP"
+            android:resizeableActivity="true"
+            android:taskAffinity="ai.openphone.agent.private_browser" />
+
         <service
             android:name=".AgentDisplayService"
             android:exported="false"

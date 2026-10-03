@@ -33,9 +33,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class AgentDisplayService extends Service {
     public static final String ACTION_START = "ai.openphone.agent.START";
     public static final String ACTION_STOP = "ai.openphone.agent.STOP";
+    public static final String ACTION_OPEN_BROWSER = "ai.openphone.agent.OPEN_BROWSER";
+    // Kept so an older installed UI/controller can still request the browser.
     public static final String ACTION_OPEN_CHROME = "ai.openphone.agent.OPEN_CHROME";
     public static final String ACTION_STATUS = "ai.openphone.agent.STATUS";
     public static final String EXTRA_MESSAGE = "message";
+    public static final String EXTRA_URL = "url";
     public static final String EXTRA_RESULT_CODE = "result_code";
     public static final String EXTRA_PROJECTION_DATA = "projection_data";
 
@@ -84,8 +87,9 @@ public class AgentDisplayService extends Service {
 
         startForeground(NOTIFICATION_ID, notification("Preparing agent display…"));
         ensureDisplay(intent);
-        if (ACTION_OPEN_CHROME.equals(action)) {
-            launchChrome();
+        if (ACTION_OPEN_BROWSER.equals(action) || ACTION_OPEN_CHROME.equals(action)) {
+            String url = intent == null ? null : intent.getStringExtra(EXTRA_URL);
+            launchAgentBrowser(url);
         }
         return START_STICKY;
     }
@@ -156,22 +160,24 @@ public class AgentDisplayService extends Service {
         publish("Ready");
     }
 
-    private void launchChrome() {
+    private void launchAgentBrowser(String requestedUrl) {
         if (virtualDisplay == null) {
-            publish("Cannot launch Chrome: display is unavailable");
+            publish("Cannot launch browser: display is unavailable");
             return;
         }
         Display display = virtualDisplay.getDisplay();
-        Intent browser = new Intent(Intent.ACTION_VIEW, Uri.parse("https://example.com"));
-        browser.setPackage("com.android.chrome");
-        browser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_MULTIPLE_TASK);
+        String url = requestedUrl == null || requestedUrl.isBlank()
+                ? "https://www.wikipedia.org/" : requestedUrl;
+        Intent browser = new Intent(Intent.ACTION_VIEW, Uri.parse(url),
+                this, AgentBrowserActivity.class);
+        browser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         ActivityOptions options = ActivityOptions.makeBasic();
         options.setLaunchDisplayId(display.getDisplayId());
         try {
             startActivity(browser, options.toBundle());
-            publish("Chrome launched on the agent display");
+            publish("Isolated browser launched on the agent display");
         } catch (Exception error) {
-            Log.e(TAG, "Could not launch Chrome on virtual display", error);
+            Log.e(TAG, "Could not launch isolated browser on virtual display", error);
             publish("Ready — launch apps with the Mac controller");
         }
     }
