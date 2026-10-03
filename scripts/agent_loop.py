@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -151,7 +152,7 @@ class AndroidController:
         if self.dry_run:
             print("DRY-RUN", " ".join(command))
             return b"" if binary else ""
-        result = subprocess.run(command, capture_output=True, check=False)
+        result = subprocess.run(command, capture_output=True, check=False, timeout=20)
         if result.returncode != 0:
             message = result.stderr.decode("utf-8", "replace").strip()
             raise AgentError(f"adb command failed: {message or command}")
@@ -168,7 +169,7 @@ class AndroidController:
 
     def require_display(self) -> int:
         display_id = int(self.state().get("displayId", -1))
-        if display_id < 0:
+        if display_id <= 0:
             raise AgentError("agent display is stopped; tap Start agent display in the app")
         raw = self._run("shell", "cmd", "display", "get-displays")
         if f"Display id {display_id}:" not in str(raw):
@@ -289,7 +290,10 @@ class AndroidController:
             if len(value) > 500:
                 raise AgentError("input_text is limited to 500 characters")
             adb_text = value.replace("%", "%25").replace(" ", "%s")
-            self._run("shell", "input", "-d", str(display_id), "text", adb_text)
+            focus = str(self._run("shell", "dumpsys", "input"))
+            if not re.search(rf"(?:m?FocusedDisplayId|FocusedDisplay)\s*[:=]\s*{display_id}\b", focus):
+                raise AgentError("text input paused: private display does not own input focus; refusing to use the owner's keyboard")
+            self._run("shell", "input", "-d", str(display_id), "text", shlex.quote(adb_text))
         elif name == "key":
             keycode = bounded_int(arguments, "keycode", 0, 1000)
             self._run(
@@ -545,7 +549,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--goal", required=True, help="Natural-language task for the agent")
     parser.add_argument(
         "--provider",
-        choices=("mock", "openai"),
+        choices=("mock", "openai", "autoglm"),
         default=os.environ.get("AGENT_PROVIDER", "mock"),
     )
     parser.add_argument(
@@ -558,6 +562,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--no-image", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--observe-only", action="store_true", help="Allow only finish/request_user; never execute UI actions")
     parser.add_argument("--initial-url", default="https://example.com")
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
     return parser
@@ -569,6 +574,11 @@ def run(args: argparse.Namespace) -> int:
     controller = AndroidController(locate_adb(), dry_run=args.dry_run)
     if args.provider == "mock":
         planner: Any = MockPlanner(args.initial_url)
+    elif args.provider == "autoglm":
+        from autoglm_adapter import AutoGLMPlanner
+        if not args.model:
+            raise AgentError("--model is required for AutoGLM")
+        planner = AutoGLMPlanner(args.base_url, args.model, args.api_key, args.timeout, WIDTH, HEIGHT)
     else:
         planner = OpenAICompatiblePlanner(
             args.base_url, args.model, args.api_key, args.timeout
@@ -583,7 +593,7 @@ def run(args: argparse.Namespace) -> int:
         "goal": args.goal,
         "provider": args.provider,
         "model": args.model or None,
-        "base_url": args.base_url if args.provider == "openai" else None,
+        "base_url": args.base_url if args.provider != "mock" else None,
         "max_steps": args.max_steps,
     }
     (run_dir / "run.json").write_text(
@@ -599,10 +609,13 @@ def run(args: argparse.Namespace) -> int:
 
     for step in range(args.max_steps):
         observation = controller.capture(run_dir / f"step-{step:02d}.png")
-        action = planner.next_action(
-            args.goal, observation, history, include_image=not args.no_image
-        )
-        fingerprint = json.dumps(action, ensure_ascii=False, sort_keys=True)
+        try:
+            action = planner.next_action(
+                args.goal, observation, history, include_image=not args.no_image
+            )
+        except (ValueError, SyntaxError, KeyError, urllib.error.URLError) as error:
+            raise AgentError(f"model request/action failed: {error}") from error
+        fingerprint = json.dumps({"action": action["action"], "arguments": action.get("arguments", {})}, ensure_ascii=False, sort_keys=True)
         repeated_action_count = (
             repeated_action_count + 1 if fingerprint == prior_action_fingerprint else 0
         )
@@ -632,7 +645,10 @@ def run(args: argparse.Namespace) -> int:
         if action["action"] == "finish":
             event["result"] = "finished"
             log_event(events_path, event)
-            print(action["arguments"].get("summary", "Task finished"))
+            summary = action["arguments"].get("summary", "Task finished")
+            metadata.update({"status": "finished", "finished_at": utc_now(), "summary": summary})
+            (run_dir / "run.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            print(summary)
             return 0
 
         safety_block = sensitive_reason(action)
@@ -642,6 +658,11 @@ def run(args: argparse.Namespace) -> int:
             log_event(events_path, event)
             print(f"Paused by safety guard: {safety_block}")
             return 2
+
+        if args.observe_only:
+            event["result"] = "blocked_observe_only"
+            log_event(events_path, event)
+            raise AgentError("observe-only verification refused a UI action")
 
         controller.execute(action)
         if action["action"] not in {"wait"}:
@@ -671,7 +692,7 @@ def main() -> int:
     except KeyboardInterrupt:
         print("Interrupted", file=sys.stderr)
         return 130
-    except AgentError as error:
+    except (AgentError, subprocess.TimeoutExpired) as error:
         print(f"Agent error: {error}", file=sys.stderr)
         return 1
 

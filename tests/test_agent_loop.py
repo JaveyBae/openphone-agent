@@ -44,6 +44,12 @@ class ParseActionTest(unittest.TestCase):
         }
         self.assertIsNotNone(agent_loop.sensitive_reason(action))
 
+    def test_owner_display_zero_is_rejected(self):
+        controller = agent_loop.AndroidController("unused")
+        controller.state = lambda: {"displayId": 0}
+        with self.assertRaises(agent_loop.AgentError):
+            controller.require_display()
+
     def test_package_display_parser_ignores_historical_references(self):
         dump = """Display #0 (activities from top to bottom):
   * Task{abc #1 A=example.owner}

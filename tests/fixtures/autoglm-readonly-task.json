@@ -1,0 +1,5 @@
+{
+  "id": "3312bea1-1e9a-4a11-a478-63e79d509740",
+  "goal": "Read only the current private-display screenshot. Do not tap, swipe, type, launch apps or change pages. Directly use finish(message=...) to list in Chinese the four Wikimedia project names visible on this screen: Commons, Wikivoyage, Wiktionary and Wikibooks. Do not include article counts.",
+  "observeOnly": true
+}

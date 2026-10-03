@@ -58,8 +58,10 @@ Run the chat-to-agent bridge (mock mode needs no API key):
 python3 scripts/chat_bridge.py --provider mock
 ```
 
-Then type a task in the Android app. For a real vision model, set the API
-environment variables below and start the bridge with `--provider openai`.
+Then type a task in the Android app. For the deployed AutoGLM model, run
+`python3 scripts/autoglm_runtime.py start` to enable the automatically reconnecting
+SSH tunnel and `autoglm` chat bridge. Stop any manual mock bridge first.
+Other real vision models use the variables below and `--provider openai`.
 
 Verify the complete loop without an API:
 
@@ -91,7 +93,7 @@ the screenshot used for every decision. The API key is never written to the run 
 
 - `ADB`: optional path to `adb`; otherwise the script checks `PATH`, `ANDROID_HOME`, and the standard macOS SDK location.
 - `CAPTURE_DIR`: local screenshot directory (defaults to `captures`).
-- `AGENT_PROVIDER`: `mock` or `openai`.
+- `AGENT_PROVIDER`: `mock`, `openai`, or `autoglm` (native phone-action protocol).
 - `AGENT_BASE_URL`: OpenAI-compatible base URL, commonly `http://host:11434/v1` for Ollama.
 - `AGENT_MODEL`: model name exposed by the API. A vision-capable model is required for screenshot-only operation.
 - `AGENT_API_KEY`: optional bearer token; keep it local and never commit it.

@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import argparse
 import base64
+import fcntl
 import json
 import os
 import re
 import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -93,10 +95,34 @@ class Bridge:
     def run_task(self, task: dict[str, Any]) -> None:
         task_id = str(task["id"])
         goal = str(task["goal"])
-        self.update(task_id, "running", "Agent 已在私有屏幕开始执行…")
+        self.last_task_id = task_id
+        self.save_state(task_id)  # Never automatically replay an interrupted task after restart.
+        self.update(task_id, "running", f"正在连接 {self.args.model or self.args.provider}…")
+
+        if self.args.provider != "mock":
+            for attempt in range(10):
+                try:
+                    request = urllib.request.Request(self.args.base_url.rstrip("/") + "/models")
+                    if self.args.api_key:
+                        request.add_header("Authorization", "Bearer " + self.args.api_key)
+                    with urllib.request.urlopen(request, timeout=3):
+                        pass
+                    break
+                except OSError:
+                    if attempt == 0:
+                        self.update(task_id, "running", "正在等待模型连接，SSH 隧道会自动重连…")
+                    time.sleep(3)
+            else:
+                self.update(task_id, "failed", "模型连接尚未恢复，请稍后重新提交；没有执行手机操作。")
+                self.last_task_id = task_id
+                self.save_state(task_id)
+                return
+
+        self.update(task_id, "running", f"已连接 {self.args.model or self.args.provider}，正在读取私有屏幕…")
 
         command = [
             sys.executable,
+            "-u",
             str(Path(__file__).with_name("agent_loop.py")),
             "--goal",
             goal,
@@ -109,12 +135,13 @@ class Bridge:
             "--initial-url",
             self.args.initial_url,
         ]
-        if self.args.provider == "openai":
+        if self.args.provider != "mock":
             command += [
                 "--base-url", self.args.base_url,
                 "--model", self.args.model,
-                "--api-key", self.args.api_key,
             ]
+        if task.get("observeOnly") is True:
+            command += ["--observe-only"]
 
         process = subprocess.Popen(
             command,
@@ -122,20 +149,34 @@ class Bridge:
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            env={**os.environ, "AGENT_API_KEY": self.args.api_key},
         )
         lines: list[str] = []
         assert process.stdout is not None
-        for raw in process.stdout:
-            line = raw.strip()
-            if not line:
-                continue
-            print(line, flush=True)
-            lines.append(line)
-            progress = progress_message(line)
-            if progress:
-                self.update(task_id, "running", progress)
-        return_code = process.wait()
+        try:
+            for raw in process.stdout:
+                line = raw.strip()
+                if not line:
+                    continue
+                print(line, flush=True)
+                lines.append(line)
+                progress = progress_message(line)
+                if progress:
+                    self.update(task_id, "running", progress)
+            return_code = process.wait()
+        finally:
+            # Do not leave an orphan controller issuing ADB actions when the
+            # device disappears or returning progress to the APP fails.
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+            process.stdout.close()
         final_line = lines[-1] if lines else "Agent 未返回详细信息"
+        summary = result_summary(lines, self.args.runs_dir) or final_line
         if return_code == 0:
             if self.args.provider == "mock":
                 message = (
@@ -143,7 +184,7 @@ class Bridge:
                     "主屏没有被 Agent 操作。"
                 )
             else:
-                message = "任务已完成。" + final_line
+                message = "任务已完成。\n" + summary
             self.update(task_id, "completed", message)
         elif return_code == 2:
             self.update(task_id, "needs_user", final_line)
@@ -153,16 +194,30 @@ class Bridge:
         self.save_state(task_id)
 
     def loop(self) -> int:
-        print("Chat bridge is ready. Send a task from the Android chat UI.")
+        lock = (self.args.runs_dir / "chat-bridge.lock").open("a")
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print("Another chat bridge already owns this runs directory", flush=True)
+            return 1
+        # Keep the descriptor alive throughout the loop.
+        self.lock = lock
+        print(f"Chat bridge ready: provider={self.args.provider}, model={self.args.model}. Send a task from the Android chat UI.", flush=True)
         while True:
-            task = self.read_pending()
-            if task and str(task["id"]) != self.last_task_id:
-                self.run_task(task)
-                if self.args.once:
+            try:
+                task = self.read_pending()
+                if task and str(task["id"]) != self.last_task_id:
+                    self.run_task(task)
+                    if self.args.once:
+                        return 0
+                elif self.args.once:
+                    print("No new Android chat task is pending.")
                     return 0
-            elif self.args.once:
-                print("No new Android chat task is pending.")
-                return 0
+            except (subprocess.TimeoutExpired, subprocess.CalledProcessError, RuntimeError, OSError) as error:
+                print(f"Bridge waiting for device: {error}", flush=True)
+                if self.args.once:
+                    return 1
+                time.sleep(5)
             time.sleep(self.args.poll_interval)
 
 
@@ -182,13 +237,30 @@ def progress_message(line: str) -> str | None:
     return labels.get(match.group(1), "Agent 正在执行…")
 
 
+def result_summary(lines: list[str], runs_dir: Path) -> str | None:
+    """Read the controller's structured result instead of dropping multiline text."""
+    for line in lines:
+        if not line.startswith("Run log: "):
+            continue
+        run_path = Path(line.removeprefix("Run log: ")).resolve()
+        if not run_path.is_relative_to(runs_dir.resolve()):
+            return None
+        try:
+            payload = json.loads((run_path / "run.json").read_text(encoding="utf-8"))
+            value = payload.get("summary")
+            return value if isinstance(value, str) else None
+        except (OSError, json.JSONDecodeError):
+            return None
+    return None
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
         description="Run Android chat tasks on the private display"
     )
     result.add_argument(
         "--provider",
-        choices=("mock", "openai"),
+        choices=("mock", "openai", "autoglm"),
         default=os.environ.get("AGENT_PROVIDER", "mock"),
     )
     result.add_argument(
