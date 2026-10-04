@@ -205,6 +205,12 @@ class AndroidController:
 
     def capture(self, target: Path) -> Observation:
         display_id = self.require_display()
+        self.require_private_content(display_id)
+        if getattr(self, "_last_capture_display", None) != display_id:
+            # The producer writes at most every 750 ms. Let the first frame
+            # after workspace initialization replace any startup mirror frame.
+            time.sleep(0.8)
+            self._last_capture_display = display_id
         payload = self._run(
             "exec-out",
             "run-as",
@@ -216,8 +222,14 @@ class AndroidController:
         assert isinstance(payload, bytes)
         if len(payload) < 128:
             raise AgentError("no agent-display frame is available yet")
+        self.require_private_content(display_id)
         target.write_bytes(payload)
         return Observation(target, hashlib.sha256(payload).hexdigest(), display_id)
+
+    def require_private_content(self, display_id: int) -> None:
+        dump = str(self._run("shell", "dumpsys", "display"))
+        if display_has_content(dump, display_id) is not True:
+            raise AgentError("private workspace has no verified content; refusing a possible owner-screen mirror. Initialize it with scripts/agentctl.sh open-browser")
 
     def execute(self, action: dict[str, Any]) -> None:
         name = action["action"]
@@ -481,6 +493,18 @@ def parse_action(raw: str) -> dict[str, Any]:
     action.setdefault("reason", "")
     action.setdefault("risk", "none")
     return action
+
+
+def display_has_content(display_dump: str, display_id: int) -> bool | None:
+    """Read a logical display's content flag; unknown formats fail closed."""
+    if display_id <= 0 or "Logical Displays:" not in display_dump:
+        return None
+    logical = display_dump.split("Logical Displays:", 1)[1]
+    block = re.search(rf"(?ms)^[ \t]*Display {display_id}:[ \t]*\n(.*?)(?=^[ \t]*Display \d+:[ \t]*$|\Z)", logical)
+    if not block:
+        return None
+    flag = re.search(r"\bmHasContent=(true|false)\b", block.group(1))
+    return flag.group(1) == "true" if flag else None
 
 
 def parse_package_displays(activity_dump: str, package: str) -> set[int]:

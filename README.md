@@ -36,7 +36,7 @@ export JAVA_HOME="/path/to/jdk-17/Contents/Home"
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Open **OpenPhone Agent**, tap **Start agent display**, choose **Entire screen**, then approve **Start**. The permission is one-session only.
+Open **OpenPhone Agent**, tap **私有屏** in the header, choose **Entire screen**, then approve **Start**. The permission is one-session only. Initialize the workspace with the host-side `open-browser` command below: Android may deny an ordinary APP launching onto this display itself.
 
 ```bash
 ./scripts/agentctl.sh state
@@ -50,7 +50,25 @@ the phone owner's screen or input:
 
 ```bash
 python3 scripts/display_viewer.py --always-on-top
+# Side-by-side owner screen + private screen (local read-only previews):
+python3 scripts/display_viewer.py --both
 ```
+
+`--both` keeps controls/status outside the phone images and fits both screens to
+the resizable window. The owner preview stays local; it is never sent to a model.
+Display IDs change after a reboot/recreation; the viewer reads the current ID.
+Use Android Studio to interact with the owner screen.
+
+For Chinese chat input, enable Chinese (Simplified) / Pinyin in Gboard Languages.
+The narrow bar covering the chat is Gboard's stylus-writing toolbar, not an APP
+sidebar. On this emulator, disable stylus handwriting with
+`adb shell settings put secure stylus_handwriting_enabled 0`; restore the default
+with `adb shell settings delete secure stylus_handwriting_enabled`. Turn off
+Gboard's Floating keyboard mode to dock the keyboard below the chat. This only
+configures user chat input; it does not add Unicode ADB input for the agent.
+The main chat applies system-bar and keyboard insets so the header and composer
+stay unobscured on Android 15. This follows the platform's
+[edge-to-edge guidance](https://developer.android.com/develop/ui/views/layout/edge-to-edge).
 
 Run the chat-to-agent bridge (mock mode needs no API key):
 

@@ -9,6 +9,7 @@ import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.Insets;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.hardware.display.DisplayManager;
@@ -19,6 +20,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
 import android.view.View;
+import android.view.WindowInsets;
 import android.view.inputmethod.EditorInfo;
 import android.widget.Button;
 import android.widget.EditText;
@@ -103,6 +105,21 @@ public class MainActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.rgb(245, 247, 251));
+        // Android 15 enforces edge-to-edge. Keep the header below system bars
+        // and the composer above the IME instead of allowing either to overlap.
+        if (Build.VERSION.SDK_INT >= 30) {
+            getWindow().setDecorFitsSystemWindows(false);
+            root.setOnApplyWindowInsetsListener((view, insets) -> {
+                Insets safe = insets.getInsets(WindowInsets.Type.systemBars()
+                        | WindowInsets.Type.displayCutout());
+                Insets ime = insets.getInsets(WindowInsets.Type.ime());
+                view.setPadding(safe.left, safe.top, safe.right,
+                        Math.max(safe.bottom, ime.bottom));
+                return insets;
+            });
+        } else {
+            root.setFitsSystemWindows(true);
+        }
 
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
@@ -130,6 +147,14 @@ public class MainActivity extends Activity {
         privacy.setGravity(Gravity.CENTER);
         privacy.setPadding(dp(10), dp(6), dp(10), dp(6));
         privacy.setBackground(rounded(Color.rgb(239, 246, 255), 14));
+        privacy.setContentDescription("开启 Agent 私有工作区");
+        privacy.setOnClickListener(view -> {
+            if (!isAgentDisplayAlive()) {
+                requestCapturePermission();
+            } else {
+                addBubble("后台工作区已开启，可在电脑的双屏预览窗口查看。", false);
+            }
+        });
         header.addView(privacy);
         root.addView(header, matchWrap());
 

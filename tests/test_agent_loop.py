@@ -50,6 +50,25 @@ class ParseActionTest(unittest.TestCase):
         with self.assertRaises(agent_loop.AgentError):
             controller.require_display()
 
+    def test_private_content_flag_is_display_scoped(self):
+        dump = """Logical Displays: size=2
+  Display 0:
+    mHasContent=true
+  Display 3:
+    mDisplayId=3
+    mHasContent=false
+"""
+        self.assertIs(False, agent_loop.display_has_content(dump, 3))
+        self.assertIsNone(agent_loop.display_has_content(dump, 0))
+        self.assertIsNone(agent_loop.display_has_content(dump, 2))
+        self.assertIs(True, agent_loop.display_has_content(dump.replace("mHasContent=false", "mHasContent=true"), 3))
+
+    def test_mirrored_or_unknown_content_is_rejected(self):
+        controller = agent_loop.AndroidController("unused")
+        controller._run = lambda *args: "Logical Displays:\n  Display 2:\n    mHasContent=false\n"
+        with self.assertRaises(agent_loop.AgentError):
+            controller.require_private_content(2)
+
     def test_package_display_parser_ignores_historical_references(self):
         dump = """Display #0 (activities from top to bottom):
   * Task{abc #1 A=example.owner}
