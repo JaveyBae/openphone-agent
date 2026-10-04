@@ -229,6 +229,10 @@ public class AgentDisplayService extends Service {
     }
 
     private void publish(String message) {
+        if ("adb-shell".equals(getSharedPreferences(PREFS, MODE_PRIVATE)
+                .getString("backend", ""))) {
+            return; // A legacy projection must not replace shell workspace state.
+        }
         int displayId = virtualDisplay == null || virtualDisplay.getDisplay() == null
                 ? -1 : virtualDisplay.getDisplay().getDisplayId();
         getSharedPreferences(PREFS, MODE_PRIVATE)

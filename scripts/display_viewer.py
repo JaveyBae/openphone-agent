@@ -16,7 +16,7 @@ from typing import Any
 
 from PIL import Image, ImageTk
 
-from agent_loop import PACKAGE, display_has_content, locate_adb
+from agent_loop import AndroidController, locate_adb, private_frame_command
 
 
 @dataclass(frozen=True)
@@ -107,21 +107,13 @@ class AgentDisplayViewer:
         return result.stdout
 
     def read_display_id(self) -> int:
-        payload = self.adb_run(
-            "shell", "run-as", PACKAGE, "cat", "files/display-state.json"
-        )
-        state: dict[str, Any] = json.loads(payload.decode("utf-8"))
-        display_id = int(state.get("displayId", -1))
-        if display_id <= 0:
-            raise RuntimeError("Agent display is stopped; tap Start agent display")
-        displays = self.adb_run("shell", "cmd", "display", "get-displays")
-        if f"Display id {display_id}:".encode() not in displays:
-            raise RuntimeError(
-                f"Agent display {display_id} expired; tap Start agent display again"
-            )
-        dump = self.adb_run("shell", "dumpsys", "display").decode("utf-8", "replace")
-        if display_has_content(dump, display_id) is not True:
-            raise RuntimeError("私有屏尚未初始化；请运行 scripts/agentctl.sh open-browser")
+        controller = AndroidController(self.adb)
+        display_id = controller.require_display()
+        controller.require_private_content(display_id)
+        state = controller.state()
+        if state.get("displayId") != display_id:
+            raise RuntimeError("Workspace changed while reading preview")
+        self.frame_state = state
         return display_id
 
     def pull_frames(self) -> None:
@@ -145,9 +137,7 @@ class AgentDisplayViewer:
             payload = self.adb_run("exec-out", "screencap", "-p")
         else:
             display_id = self.read_display_id()
-            payload = self.adb_run(
-                "exec-out", "run-as", PACKAGE, "cat", "files/display/latest.png",
-            )
+            payload = self.adb_run(*private_frame_command(self.frame_state))
         if not payload.startswith(b"\x89PNG\r\n\x1a\n"):
             raise RuntimeError("The display has not produced a frame yet")
         return Frame(payload, time.monotonic(), display_id)
@@ -169,7 +159,7 @@ class AgentDisplayViewer:
             self.canvas.delete("waiting")
             self.canvas.create_text(
                 self.canvas.winfo_width() / 2, self.canvas.winfo_height() / 2,
-                text="工作区未连接\n请在 APP 中点击「私有屏」重新授权",
+                text="工作区未连接\n请连接 ADB 并启动独立工作区",
                 width=max(100, self.canvas.winfo_width() - 30), fill="#cbd5e1",
                 font=("Helvetica", 16), justify="center", tags=("waiting",),
             )

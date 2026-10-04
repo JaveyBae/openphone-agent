@@ -187,7 +187,7 @@ class Bridge:
                 message = "任务已完成。\n" + summary
             self.update(task_id, "completed", message)
         elif return_code == 2:
-            self.update(task_id, "needs_user", final_line)
+            self.update(task_id, "needs_user", final_line.removeprefix("Paused for user: "))
         else:
             self.update(task_id, "failed", failure_message(final_line))
         self.last_task_id = task_id
@@ -240,6 +240,10 @@ def progress_message(line: str) -> str | None:
 
 def failure_message(line: str) -> str:
     """Keep startup diagnostics in the host log, with actionable chat copy."""
+    if "focus isolation" in line or "isolated focus" in line or "Android 15+" in line:
+        return "设备未提供独立焦点工作区，已停止操作以保护主屏。当前方案需要 Android 15+ 和已授权的 ADB 电脑连接。"
+    if "owner input focus" in line or "private display has no focused window" in line:
+        return "检测到输入焦点不符合隔离条件，任务已停止；没有切换主屏或使用你的键盘。请检查双屏后重新提交。"
     if "model request/action failed:" in line:
         return "模型请求或操作格式校验失败，本步操作未执行。请重新提交任务；详细错误已保留在电脑日志。"
     if "private workspace has no verified content" in line:
@@ -249,7 +253,7 @@ def failure_message(line: str) -> str:
     if "private workspace changed during initialization" in line:
         return "后台工作区在初始化时被重新创建，任务已暂停。请重新提交任务。"
     if "agent display is stopped" in line or "no longer exists" in line:
-        return "后台工作区已关闭，请点顶部「私有屏」重新授权，然后重新提交任务。"
+        return "后台工作区已关闭，请检查已授权的 ADB 电脑连接，然后重新提交任务；不需要录制主屏。"
     return line
 
 

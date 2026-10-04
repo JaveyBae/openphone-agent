@@ -13,7 +13,6 @@ import android.graphics.Insets;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.hardware.display.DisplayManager;
-import android.media.projection.MediaProjectionManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -36,14 +35,12 @@ import java.util.UUID;
 
 /** Main-screen chat UI. The private display remains an implementation detail. */
 public class MainActivity extends Activity {
-    private static final int REQUEST_CAPTURE = 501;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private TextView agentStatus;
     private LinearLayout messages;
     private ScrollView chatScroll;
     private EditText taskInput;
-    private String pendingGoal;
     private String renderedUpdate = "";
     private String progressTaskId;
     private TextView progressBubble;
@@ -52,6 +49,7 @@ public class MainActivity extends Activity {
         @Override
         public void run() {
             renderLatestTaskUpdate();
+            refreshAgentStatus();
             handler.postDelayed(this, 600);
         }
     };
@@ -150,7 +148,7 @@ public class MainActivity extends Activity {
         privacy.setContentDescription("开启 Agent 私有工作区");
         privacy.setOnClickListener(view -> {
             if (!isAgentDisplayAlive()) {
-                requestCapturePermission();
+                addBubble("请连接已授权的 ADB 电脑并启动 Agent 服务。发送任务后会自动准备独立焦点工作区；不需要录制主屏。", false);
             } else {
                 addBubble("后台工作区已开启，可在电脑的双屏预览窗口查看。", false);
             }
@@ -215,10 +213,7 @@ public class MainActivity extends Activity {
         taskInput.setText("");
         addBubble(goal, true);
         if (!isAgentDisplayAlive()) {
-            pendingGoal = goal;
-            addBubble("首次使用需要开启后台工作区。请在系统弹窗中选择“整个屏幕”并点击“开始”。", false);
-            requestCapturePermission();
-            return;
+            addBubble("正在通过电脑准备独立焦点工作区，不会录制或操作主屏。", false);
         }
         enqueueTask(goal);
     }
@@ -296,17 +291,18 @@ public class MainActivity extends Activity {
     }
 
     private void scrollToBottom() {
-        chatScroll.post(() -> chatScroll.fullScroll(View.FOCUS_DOWN));
+        // Scroll without moving keyboard focus away from the owner's composer.
+        chatScroll.post(() -> chatScroll.smoothScrollTo(0, messages.getHeight()));
     }
 
     private void refreshAgentStatus() {
         if (isAgentDisplayAlive()) {
             int id = getSharedPreferences(AgentDisplayService.PREFS, MODE_PRIVATE)
                     .getInt(AgentDisplayService.KEY_DISPLAY_ID, -1);
-            agentStatus.setText("● 后台 Agent 已就绪 · Display " + id);
+            agentStatus.setText("● 焦点已隔离 · Display " + id);
             agentStatus.setTextColor(Color.rgb(22, 163, 74));
         } else {
-            agentStatus.setText("○ 发送首个任务时开启后台 Agent");
+            agentStatus.setText("○ 等待电脑连接独立工作区");
             agentStatus.setTextColor(Color.rgb(100, 116, 139));
         }
     }
@@ -314,43 +310,14 @@ public class MainActivity extends Activity {
     private boolean isAgentDisplayAlive() {
         int id = getSharedPreferences(AgentDisplayService.PREFS, MODE_PRIVATE)
                 .getInt(AgentDisplayService.KEY_DISPLAY_ID, -1);
-        if (id < 0) {
+        if (id <= 0) {
             return false;
         }
         DisplayManager manager = getSystemService(DisplayManager.class);
-        return manager != null && manager.getDisplay(id) != null;
-    }
-
-    private void requestCapturePermission() {
-        MediaProjectionManager manager =
-                (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
-        startActivityForResult(manager.createScreenCaptureIntent(), REQUEST_CAPTURE);
-    }
-
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != REQUEST_CAPTURE) {
-            return;
-        }
-        if (resultCode != RESULT_OK || data == null) {
-            addBubble("后台工作区未开启，任务已暂停。", false);
-            pendingGoal = null;
-            return;
-        }
-        Intent service = new Intent(this, AgentDisplayService.class)
-                .setAction(AgentDisplayService.ACTION_START)
-                .putExtra(AgentDisplayService.EXTRA_RESULT_CODE, resultCode)
-                .putExtra(AgentDisplayService.EXTRA_PROJECTION_DATA, data);
-        startForegroundService(service);
-        handler.postDelayed(() -> {
-            refreshAgentStatus();
-            if (pendingGoal != null && isAgentDisplayAlive()) {
-                String goal = pendingGoal;
-                pendingGoal = null;
-                enqueueTask(goal);
-            }
-        }, 1200);
+        android.view.Display display = manager == null ? null : manager.getDisplay(id);
+        return display != null
+                && (display.getFlags() & AgentResultReceiver.REQUIRED_DISPLAY_FLAGS)
+                == AgentResultReceiver.REQUIRED_DISPLAY_FLAGS;
     }
 
     private TextView text(String value, int sizeSp, int color) {

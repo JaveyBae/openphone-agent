@@ -29,6 +29,9 @@ from typing import Any
 PACKAGE = "ai.openphone.agent"
 WIDTH = 720
 HEIGHT = 1280
+WORKSPACE_DIRECTORY = "/data/local/tmp/openphone-workspace"
+WORKSPACE_STATE = WORKSPACE_DIRECTORY + "/state.json"
+ISOLATION_FLAGS = ("FLAG_TRUSTED", "FLAG_OWN_FOCUS", "FLAG_STEAL_TOP_FOCUS_DISABLED", "FLAG_OWN_CONTENT_ONLY")
 ALLOWED_ACTIONS = {
     "open_url",
     "launch_app",
@@ -63,6 +66,14 @@ SENSITIVE_TERMS = (
     "卸载",
     "发送",
     "同意条款",
+    "captcha",
+    "login",
+    "登录",
+    "快速验证",
+    "京东验证",
+    "安全验证",
+    "security verification",
+    "人机验证",
 )
 
 SYSTEM_PROMPT = f"""You are the action planner for a private Android display.
@@ -101,6 +112,62 @@ Rules:
 
 class AgentError(RuntimeError):
     pass
+
+
+def workspace_identity(state: dict) -> bool:
+    session = state.get("session", "")
+    return (state.get("backend") == "adb-shell"
+            and type(state.get("displayId")) is int and state["displayId"] > 0
+            and isinstance(session, str)
+            and re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", session) is not None
+            and state.get("displayName") == "OpenPhone Isolated Workspace " + session)
+
+
+def workspace_is_isolated(state: dict, displays: str, dump: str) -> bool:
+    """Check live identity and device flags, not a cached readiness boolean.
+
+    Android 15's DisplayInfo.toString omits the two focus flags. The underlying
+    DisplayDeviceInfo line in dumpsys display includes them.
+    """
+    if not workspace_identity(state):
+        return False
+    name = state["displayName"]
+    live = any(line.startswith(f"Display id {state['displayId']}:")
+               and f'"{name}"' in line and "owner com.android.shell (uid 2000)" in line
+               for line in displays.splitlines())
+    return live and any(line.strip().startswith(f'DisplayDeviceInfo{{"{name}":')
+                        and "owner com.android.shell (uid 2000)" in line
+                        and all(re.search(rf"\b{flag}\b", line) for flag in ISOLATION_FLAGS)
+                        for line in dump.splitlines())
+
+
+def private_frame_command(state: dict) -> tuple[str, ...]:
+    if state.get("backend") == "adb-shell":
+        if not workspace_identity(state):
+            raise AgentError("Invalid isolated workspace identity")
+        return ("exec-out", "cat", WORKSPACE_DIRECTORY + "/frame-" + state["session"] + ".png")
+    return ("exec-out", "run-as", PACKAGE, "cat", "files/display/latest.png")
+
+
+def input_focus(dump: str) -> tuple[int | None, set[int]]:
+    global_focus = re.search(r"(?:m?FocusedDisplayId|FocusedDisplay)\s*[:=]\s*(\d+)\b", dump)
+    windows = re.search(r"FocusedWindows:[ \t]*\n((?:[ \t]+displayId=[^\n]*\n)*)", dump)
+    focused = set(map(int, re.findall(r"displayId=(\d+),\s*name=", windows.group(1)))) if windows else set()
+    return (int(global_focus.group(1)) if global_focus else None, focused)
+
+
+def explicit_target_package(goal: str) -> str | None:
+    # Route only an explicit, single-app open request; merely mentioning a brand
+    # or asking for a comparison must not navigate the existing workspace.
+    names = {"京东": "com.jingdong.app.mall", "jd": "com.jingdong.app.mall",
+             "淘宝": "com.taobao.taobao", "taobao": "com.taobao.taobao",
+             "拼多多": "com.xunmeng.pinduoduo", "pinduoduo": "com.xunmeng.pinduoduo"}
+    mentioned = {package for name, package in names.items()
+                 if re.search(re.escape(name) if not name.isascii() else rf"\b{name}\b", goal, re.I)}
+    if len(mentioned) != 1 or re.search(r"不要|别|不需|don't|do not", goal, re.I):
+        return None
+    match = re.search(r"(?:打开|启动|进入|\bopen\b|\blaunch\b)\s*(?:一下\s*)?(京东|淘宝|拼多多|JD\b|Taobao\b|Pinduoduo\b)", goal, re.I)
+    return names[match.group(1).lower()] if match else None
 
 
 @dataclass(frozen=True)
@@ -159,6 +226,19 @@ class AndroidController:
         return result.stdout if binary else result.stdout.decode("utf-8", "replace")
 
     def state(self) -> dict[str, Any]:
+        # A stale shell state must fail closed, never fall back to an old mirror.
+        try:
+            raw = self._run("shell", "cat", WORKSPACE_STATE)
+        except AgentError:
+            raw = None
+        if raw is not None:
+            try:
+                state = json.loads(str(raw))
+            except json.JSONDecodeError as error:
+                raise AgentError("Invalid isolated workspace state") from error
+            if not isinstance(state, dict) or not workspace_identity(state):
+                raise AgentError("Invalid isolated workspace identity")
+            return state
         raw = self._run("shell", "run-as", PACKAGE, "cat", "files/display-state.json")
         try:
             return json.loads(str(raw))
@@ -168,16 +248,35 @@ class AndroidController:
             ) from error
 
     def require_display(self) -> int:
-        display_id = int(self.state().get("displayId", -1))
-        if display_id <= 0:
+        state = self.state()
+        display_id = state.get("displayId", -1)
+        if type(display_id) is not int or display_id <= 0:
             raise AgentError("agent display is stopped; tap Start agent display in the app")
         raw = self._run("shell", "cmd", "display", "get-displays")
-        if f"Display id {display_id}:" not in str(raw):
+        lines = [line for line in str(raw).splitlines() if line.startswith(f"Display id {display_id}:")]
+        if not lines or (state.get("backend") == "adb-shell" and
+                         (f'"{state["displayName"]}"' not in lines[0]
+                          or "owner com.android.shell (uid 2000)" not in lines[0])):
             raise AgentError(
                 f"agent display {display_id} no longer exists; "
-                "tap Start agent display in the app again"
+                "check the authorized ADB workspace connection"
             )
         return display_id
+
+    def require_isolation(self, display_id: int) -> None:
+        state = self.state()
+        displays = str(self._run("shell", "cmd", "display", "get-displays"))
+        dump = str(self._run("shell", "dumpsys", "display"))
+        if state.get("displayId") != display_id or not workspace_is_isolated(state, displays, dump):
+            raise AgentError("focus isolation is unavailable; refusing to control a legacy display")
+
+    def require_owner_focus(self, private_id: int, *, private_window: bool = False) -> dict:
+        top, windows = input_focus(str(self._run("shell", "dumpsys", "input")))
+        if top != 0 or 0 not in windows:
+            raise AgentError("owner input focus is not on display 0; execution stopped without switching focus")
+        if private_window and private_id not in windows:
+            raise AgentError("private display has no focused window; refusing keyboard input")
+        return {"top_display": top, "focused_window_displays": sorted(windows)}
 
     def package_displays(self, package: str) -> set[int]:
         raw = self._run("shell", "dumpsys", "activity", "activities")
@@ -195,34 +294,36 @@ class AndroidController:
     def verify_package_on_agent_display(self, package: str, agent_display: int) -> None:
         if self.dry_run:
             return
-        time.sleep(0.5)
-        displays = self.package_displays(package)
-        if agent_display not in displays:
-            raise AgentError(
-                f"Android did not place {package} on agent display {agent_display}; "
-                "execution stopped to protect the owner's screen"
-            )
+        for _ in range(20):
+            time.sleep(0.25)
+            dump = str(self._run("shell", "dumpsys", "activity", "activities"))
+            if package_is_resumed(dump, package, agent_display):
+                return
+        raise AgentError(
+            f"Android did not resume {package} on agent display {agent_display}; "
+            "execution stopped to protect the owner's screen"
+        )
 
     def capture(self, target: Path) -> Observation:
         display_id = self.require_display()
         self.require_private_content(display_id)
+        if self.state().get("backend") == "adb-shell":
+            self.require_isolation(display_id)
         if getattr(self, "_last_capture_display", None) != display_id:
             # The producer writes at most every 750 ms. Let the first frame
             # after workspace initialization replace any startup mirror frame.
             time.sleep(0.8)
             self._last_capture_display = display_id
-        payload = self._run(
-            "exec-out",
-            "run-as",
-            PACKAGE,
-            "cat",
-            "files/display/latest.png",
-            binary=True,
-        )
+        state = self.state()
+        if state.get("displayId") != display_id:
+            raise AgentError("workspace changed before capture")
+        payload = self._run(*private_frame_command(state), binary=True)
         assert isinstance(payload, bytes)
         if len(payload) < 128:
             raise AgentError("no agent-display frame is available yet")
         self.require_private_content(display_id)
+        if self.state() != state:
+            raise AgentError("workspace changed during capture")
         target.write_bytes(payload)
         return Observation(target, hashlib.sha256(payload).hexdigest(), display_id)
 
@@ -243,6 +344,7 @@ class AndroidController:
         Unknown display metadata and read-only runs must still fail closed.
         """
         display_id = self.require_display()
+
         content = self.private_content_state(display_id)
         if content is True:
             return False
@@ -263,9 +365,13 @@ class AndroidController:
         raise AgentError("private workspace initialization failed: independent content was not verified")
 
     def execute(self, action: dict[str, Any]) -> None:
+        self.last_focus_evidence = None
         name = action["action"]
         arguments = action.get("arguments") or {}
         display_id = self.require_display()
+        if name != "wait":
+            self.require_isolation(display_id)
+            before_focus = self.require_owner_focus(display_id, private_window=name in {"input_text", "key"})
 
         if name == "open_url":
             url = require_string(arguments, "url")
@@ -291,6 +397,16 @@ class AndroidController:
             if not re.fullmatch(r"[A-Za-z0-9_.]+", package):
                 raise AgentError("invalid Android package name")
             self.require_package_off_owner_display(package, display_id)
+            tasks = private_package_tasks(str(self._run("shell", "dumpsys", "activity", "activities")), package, display_id)
+            if tasks:
+                # Resume the existing private task, preserving its login / risk
+                # screen. Relaunching JD's entry activity can immediately finish
+                # and reveal the browser instead of restoring the existing task.
+                self._run("shell", "am", "task", "focus", str(tasks[0]))
+                self.verify_package_on_agent_display(package, display_id)
+                self.last_focus_evidence = {"before": before_focus,
+                                            "after": self.require_owner_focus(display_id)}
+                return
             component_raw = self._run(
                 "shell", "cmd", "package", "resolve-activity", "--brief", package
             )
@@ -332,13 +448,14 @@ class AndroidController:
             value = require_string(arguments, "text")
             if len(value) > 500:
                 raise AgentError("input_text is limited to 500 characters")
+            if not value.isascii():
+                raise AgentError("private text input currently supports ASCII only; owner IME will not be used")
             adb_text = value.replace("%", "%25").replace(" ", "%s")
-            focus = str(self._run("shell", "dumpsys", "input"))
-            if not re.search(rf"(?:m?FocusedDisplayId|FocusedDisplay)\s*[:=]\s*{display_id}\b", focus):
-                raise AgentError("text input paused: private display does not own input focus; refusing to use the owner's keyboard")
             self._run("shell", "input", "-d", str(display_id), "text", shlex.quote(adb_text))
         elif name == "key":
             keycode = bounded_int(arguments, "keycode", 0, 1000)
+            if keycode not in {4, 19, 20, 21, 22, 61, 62, 66, 67, 112, 122, 123}:
+                raise AgentError("key is not a private navigation/edit key; global keys are forbidden")
             self._run(
                 "shell", "input", "-d", str(display_id), "keyevent", str(keycode)
             )
@@ -347,6 +464,9 @@ class AndroidController:
             time.sleep(max(0.2, min(5.0, seconds)))
         else:
             raise AgentError(f"{name} is not an executable action")
+        if name != "wait":
+            self.last_focus_evidence = {"before": before_focus,
+                                        "after": self.require_owner_focus(display_id)}
 
 
 class OpenAICompatiblePlanner:
@@ -562,6 +682,38 @@ def parse_package_displays(activity_dump: str, package: str) -> set[int]:
     return result
 
 
+def private_package_tasks(activity_dump: str, package: str, display_id: int) -> list[int]:
+    """Actual Hist records only: never focus display 0 or historical task IDs."""
+    if display_id <= 0:
+        return []
+    tasks = []
+    current = None
+    for line in activity_dump.splitlines():
+        if line.startswith("ActivityTaskSupervisor state:"):
+            break
+        match = re.match(r"\s*Display #(\d+) ", line)
+        if match:
+            current = int(match.group(1))
+        if current == display_id and re.search(r"\* Hist\s", line):
+            record = re.search(r"ActivityRecord\{[^}]*\bu\d+\s+" + re.escape(package) + r"/\S+\s+t(\d+)\b", line)
+            if record and int(record.group(1)) not in tasks:
+                tasks.append(int(record.group(1)))
+    return tasks
+
+
+def package_is_resumed(activity_dump: str, package: str, display_id: int) -> bool:
+    current = None
+    for line in activity_dump.splitlines():
+        if line.startswith("ActivityTaskSupervisor state:"):
+            break
+        match = re.match(r"\s*Display #(\d+) ", line)
+        if match:
+            current = int(match.group(1))
+        if current == display_id and re.search(r"topResumedActivity=ActivityRecord\{[^}]*\bu\d+\s+" + re.escape(package) + r"/", line):
+            return True
+    return False
+
+
 def require_string(arguments: dict[str, Any], key: str) -> str:
     value = arguments.get(key)
     if not isinstance(value, str) or not value.strip():
@@ -658,6 +810,18 @@ def run(args: argparse.Namespace) -> int:
 
     print(f"[0/{args.max_steps}] initialize_workspace: verify independent content before capture")
     try:
+        if not args.observe_only and not args.dry_run:
+            from workspace_runtime import ensure_running
+            try:
+                ensure_running()
+            except RuntimeError as error:
+                raise AgentError(str(error)) from error
+        target = explicit_target_package(args.goal) if not args.observe_only else None
+        if target:
+            controller.execute({"action": "launch_app", "arguments": {"package": target}})
+            log_event(events_path, {"timestamp": utc_now(), "stage": "explicit_app_setup",
+                                   "package": target, "display_id": controller.require_display(),
+                                   "result": "executed", "focus": controller.last_focus_evidence})
         initialized = controller.prepare_workspace(
             args.initial_url, allow_initialize=not args.observe_only
         )
@@ -714,6 +878,8 @@ def run(args: argparse.Namespace) -> int:
             event["result"] = "awaiting_user"
             log_event(events_path, event)
             message = action["arguments"].get("message", "User confirmation required")
+            metadata.update({"status": "awaiting_user", "paused_at": utc_now(), "message": message})
+            (run_dir / "run.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             print(f"Paused for user: {message}")
             return 2
         if action["action"] == "finish":
@@ -730,7 +896,11 @@ def run(args: argparse.Namespace) -> int:
             event["result"] = "blocked_sensitive"
             event["safety_reason"] = safety_block
             log_event(events_path, event)
-            print(f"Paused by safety guard: {safety_block}")
+            message = "模型尝试执行需要人工确认的操作，已被安全检查拦截，本步没有执行。请人工处理后重新提交任务。"
+            metadata.update({"status": "awaiting_user", "paused_at": utc_now(), "message": message,
+                             "safety_reason": safety_block})
+            (run_dir / "run.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            print(f"Paused for user: {message}")
             return 2
 
         if args.observe_only:
@@ -739,6 +909,7 @@ def run(args: argparse.Namespace) -> int:
             raise AgentError("observe-only verification refused a UI action")
 
         controller.execute(action)
+        event["focus"] = getattr(controller, "last_focus_evidence", None)
         if action["action"] not in {"wait"}:
             time.sleep(1.0)
         changed = prior_hash is None or observation.sha256 != prior_hash
