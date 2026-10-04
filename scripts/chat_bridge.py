@@ -189,7 +189,7 @@ class Bridge:
         elif return_code == 2:
             self.update(task_id, "needs_user", final_line)
         else:
-            self.update(task_id, "failed", final_line)
+            self.update(task_id, "failed", failure_message(final_line))
         self.last_task_id = task_id
         self.save_state(task_id)
 
@@ -226,6 +226,7 @@ def progress_message(line: str) -> str | None:
     if not match:
         return None
     labels = {
+        "initialize_workspace": "正在准备独立工作区，确认不会读取主屏…",
         "open_url": "正在打开目标网页…",
         "launch_app": "正在打开所需应用…",
         "tap": "正在操作页面…",
@@ -235,6 +236,19 @@ def progress_message(line: str) -> str | None:
         "finish": "正在整理结果…",
     }
     return labels.get(match.group(1), "Agent 正在执行…")
+
+
+def failure_message(line: str) -> str:
+    """Keep startup diagnostics in the host log, with actionable chat copy."""
+    if "private workspace has no verified content" in line:
+        return "后台工作区没有可验证的独立内容，任务已停止以保护主屏。请检查电脑端控制器；只读任务不会自动打开页面。"
+    if "private workspace initialization failed" in line:
+        return "后台工作区初始化失败，尚未读取屏幕或执行任务。请检查电脑端控制器后重新提交。"
+    if "private workspace changed during initialization" in line:
+        return "后台工作区在初始化时被重新创建，任务已暂停。请重新提交任务。"
+    if "agent display is stopped" in line or "no longer exists" in line:
+        return "后台工作区已关闭，请点顶部「私有屏」重新授权，然后重新提交任务。"
+    return line
 
 
 def result_summary(lines: list[str], runs_dir: Path) -> str | None:

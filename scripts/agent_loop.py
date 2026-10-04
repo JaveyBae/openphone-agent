@@ -227,9 +227,40 @@ class AndroidController:
         return Observation(target, hashlib.sha256(payload).hexdigest(), display_id)
 
     def require_private_content(self, display_id: int) -> None:
-        dump = str(self._run("shell", "dumpsys", "display"))
-        if display_has_content(dump, display_id) is not True:
+        if self.private_content_state(display_id) is not True:
             raise AgentError("private workspace has no verified content; refusing a possible owner-screen mirror. Initialize it with scripts/agentctl.sh open-browser")
+
+    def private_content_state(self, display_id: int) -> bool | None:
+        dump = str(self._run("shell", "dumpsys", "display"))
+        return display_has_content(dump, display_id)
+
+    def prepare_workspace(self, initial_url: str, *, allow_initialize: bool) -> bool:
+        """Bootstrap a known-empty workspace, never navigate existing content.
+
+        A MediaProjection display can exist before it hosts an activity. On some
+        Android versions its empty capture mirrors the owner display. Launch our
+        separate browser through the authorized host before reading any frame.
+        Unknown display metadata and read-only runs must still fail closed.
+        """
+        display_id = self.require_display()
+        content = self.private_content_state(display_id)
+        if content is True:
+            return False
+        if content is None or not allow_initialize:
+            self.require_private_content(display_id)
+            return False
+
+        self.execute({"action": "open_url", "arguments": {"url": initial_url}})
+        for _ in range(20):
+            if self.require_display() != display_id:
+                raise AgentError("private workspace changed during initialization; submit the task again")
+            content = self.private_content_state(display_id)
+            if content is True:
+                return True
+            if content is None:
+                break
+            time.sleep(0.25)
+        raise AgentError("private workspace initialization failed: independent content was not verified")
 
     def execute(self, action: dict[str, Any]) -> None:
         name = action["action"]
@@ -624,6 +655,25 @@ def run(args: argparse.Namespace) -> int:
         json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     print(f"Run log: {run_dir}")
+
+    print(f"[0/{args.max_steps}] initialize_workspace: verify independent content before capture")
+    try:
+        initialized = controller.prepare_workspace(
+            args.initial_url, allow_initialize=not args.observe_only
+        )
+    except AgentError as error:
+        log_event(events_path, {
+            "timestamp": utc_now(), "stage": "workspace_setup",
+            "result": "blocked", "error": str(error),
+        })
+        raise
+    log_event(events_path, {
+        "timestamp": utc_now(), "stage": "workspace_setup",
+        "display_id": controller.require_display(),
+        "result": "initialized" if initialized else "existing_content",
+        "action": {"action": "open_url", "arguments": {"url": args.initial_url}}
+        if initialized else None,
+    })
 
     history: list[dict[str, Any]] = []
     prior_hash: str | None = None

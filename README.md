@@ -36,7 +36,7 @@ export JAVA_HOME="/path/to/jdk-17/Contents/Home"
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Open **OpenPhone Agent**, tap **私有屏** in the header, choose **Entire screen**, then approve **Start**. The permission is one-session only. Initialize the workspace with the host-side `open-browser` command below: Android may deny an ordinary APP launching onto this display itself.
+Open **OpenPhone Agent**, tap **私有屏** in the header, choose **Entire screen**, then approve **Start**. The permission is one-session only. The host agent initializes a newly created, empty workspace before its first screenshot; it leaves existing content unchanged. Read-only runs never initialize it. Android may deny an ordinary APP launching onto this display itself, so keep the host controller connected. The commands below also initialize it manually.
 
 ```bash
 ./scripts/agentctl.sh state
