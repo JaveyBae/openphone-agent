@@ -3,10 +3,60 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
-from autoglm_adapter import parse_native
+from autoglm_adapter import PROMPT, parse_native
 
 
 class NativeActionTest(unittest.TestCase):
+    def test_regression_labeled_jd_launch_from_failed_response(self):
+        raw = '\n\nLaunch: do(action="Launch", app="京东")\n'
+        action = parse_native(raw, 720, 1280)
+        self.assertEqual("launch_app", action["action"])
+        self.assertEqual("com.jingdong.app.mall", action["arguments"]["package"])
+        self.assertEqual('do(action="Launch", app="京东")', action["native_action"])
+
+    def test_known_label_inside_answer_tags(self):
+        action = parse_native('<think>open JD</think><answer>Launch: do(action="Launch", app="JD")</answer>', 720, 1280)
+        self.assertEqual("launch_app", action["action"])
+        self.assertIn("open JD", action["reason"])
+
+    def test_supported_labels_keep_original_action_semantics(self):
+        cases = [
+            ('Tap: do(action="Tap", element=[500,500])', "tap"),
+            ('Type: do(action="Type", text="iPhone")', "input_text"),
+            ('Swipe: do(action="Swipe", start=[500,900], end=[500,300])', "swipe"),
+            ('Back: do(action="Back")', "key"),
+            ('Wait: do(action="Wait", seconds=1)', "wait"),
+            ('Finish: finish(message="done")', "finish"),
+            ('Human assistance: do(action="Take_over", message="login")', "request_user"),
+            ('Take_over: do(action="Take_over", message="login")', "request_user"),
+        ]
+        for raw, expected in cases:
+            with self.subTest(raw=raw):
+                self.assertEqual(expected, parse_native(raw, 720, 1280)["action"])
+
+    def test_labels_do_not_allow_ambiguous_or_executable_content(self):
+        for raw in [
+            'Unknown: do(action="Launch", app="京东")',
+            'Launch: do(action="Tap", element=[500,500])',
+            'Launch: finish(message="done")',
+            'Finish: do(action="Launch", app="JD")',
+            'Launch: Launch: do(action="Launch", app="JD")',
+            'Launch: do(action="Launch", app="JD")\nTap: do(action="Tap", element=[500,500])',
+            '<answer>Launch: do(action="Launch", app="JD"); finish(message="done")</answer>',
+            '<answer>Launch: do(action="Launch", app="JD")</answer><answer>finish(message="done")</answer>',
+            'Type: do(action="Type", text=__import__("os").getcwd())',
+            'Tap: do(action="Tap", element=[-1,500])',
+            'Launch: do(action="Launch", action="Tap", app="JD")',
+            'Launch: do(**{"action":"Launch", "app":"JD"})',
+            'Launch: do("Launch", app="JD")',
+        ]:
+            with self.subTest(raw=raw), self.assertRaises((ValueError, SyntaxError)):
+                parse_native(raw, 720, 1280)
+
+    def test_prompt_uses_bare_calls_not_labeled_examples(self):
+        self.assertIn("write ONLY a single do(...) or finish(...) call", PROMPT)
+        self.assertNotIn('Launch: do(', PROMPT)
+
     def test_coordinates_are_normalized_and_clamped(self):
         action = parse_native('do(action="Tap", element=[500,1000])', 720, 1280)
         self.assertEqual(action["arguments"], {"x": 360, "y": 1279})

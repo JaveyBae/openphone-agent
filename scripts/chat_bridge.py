@@ -240,6 +240,8 @@ def progress_message(line: str) -> str | None:
 
 def failure_message(line: str) -> str:
     """Keep startup diagnostics in the host log, with actionable chat copy."""
+    if "model request/action failed:" in line:
+        return "模型请求或操作格式校验失败，本步操作未执行。请重新提交任务；详细错误已保留在电脑日志。"
     if "private workspace has no verified content" in line:
         return "后台工作区没有可验证的独立内容，任务已停止以保护主屏。请检查电脑端控制器；只读任务不会自动打开页面。"
     if "private workspace initialization failed" in line:

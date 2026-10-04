@@ -30,6 +30,11 @@ class ProgressMessageTest(unittest.TestCase):
         self.assertNotIn("Agent error", message)
         self.assertEqual("unrelated error", failure_message("unrelated error"))
 
+    def test_model_protocol_error_is_not_exposed_as_english_trace(self):
+        message = failure_message("Agent error: model request/action failed: AutoGLM must return exactly one native action")
+        self.assertIn("本步操作未执行", message)
+        self.assertNotIn("Agent error", message)
+
     def test_preserves_multiline_summary(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

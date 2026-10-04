@@ -24,14 +24,17 @@ ONE operation. Your output must follow:
 [One operation]
 </answer>
 
-- Tap: do(action="Tap", element=[x,y])
-- Type: do(action="Type", text="search keywords")
-- Swipe: do(action="Swipe", start=[x1,y1], end=[x2,y2])
-- Launch: do(action="Launch", app="Taobao")
-- Back: do(action="Back")
-- Wait: do(action="Wait", seconds=1)
-- Finish: finish(message="The result and visible evidence")
-- Human assistance: do(action="Take_over", message="What the owner needs to do")
+Inside <answer>, write ONLY a single do(...) or finish(...) call. Do not add
+operation labels, such as "Launch:", Markdown fences, lists, or a second call.
+Valid call examples (choose exactly one, replacing arguments as needed):
+do(action="Tap", element=[500,500])
+do(action="Type", text="search keywords")
+do(action="Swipe", start=[500,900], end=[500,300])
+do(action="Launch", app="JD")
+do(action="Back")
+do(action="Wait", seconds=1)
+finish(message="The result and visible evidence")
+do(action="Take_over", message="What the owner needs to do")
 
 # Private display restrictions
 Coordinates are integers normalized to 0..1000, not screenshot pixel values.
@@ -53,6 +56,16 @@ APP_PACKAGES = {
     "jd.com": "com.jingdong.app.mall", "京东": "com.jingdong.app.mall",
     "pinduoduo": "com.xunmeng.pinduoduo", "拼多多": "com.xunmeng.pinduoduo",
 }
+
+ACTION_LABELS = {
+    "Tap": "Tap", "Type": "Type", "Swipe": "Swipe", "Launch": "Launch",
+    "Back": "Back", "Wait": "Wait", "Finish": "finish",
+    "Human assistance": "Take_over", "Take_over": "Take_over",
+}
+ACTION_START = re.compile(
+    r"(?m)^[ \t]*(?:(?P<label>" + "|".join(map(re.escape, ACTION_LABELS))
+    + r")[ \t]*:[ \t]*)?(?P<operation>(?:do|finish)\s*\()"
+)
 
 
 def escape_string_newlines(code: str) -> str:
@@ -91,15 +104,21 @@ def escape_string_newlines(code: str) -> str:
 def parse_native(raw: str, width: int, height: int) -> dict:
     """Accept one do()/finish() call with literal keyword arguments only."""
     answers = re.findall(r"<answer>(.*?)</answer>", raw, re.S)
+    label = None
     if answers:
         if len(answers) != 1:
             raise ValueError("Multiple AutoGLM answers are not allowed")
         code = answers[0].strip()
+        start = ACTION_START.match(code)
+        if start and start.group("label"):
+            label = start.group("label")
+            code = code[start.start("operation"):]
     else:
-        candidates = list(re.finditer(r"(?m)^[ \t]*(?:do|finish)\s*\(", raw))
+        candidates = list(ACTION_START.finditer(raw))
         if len(candidates) != 1:
             raise ValueError("AutoGLM must return exactly one native action")
-        code = raw[candidates[0].start():].strip()
+        label = candidates[0].group("label")
+        code = raw[candidates[0].start("operation"):].strip()
         code = re.sub(r"\s*</answer>\s*$", "", code)
     tree = ast.parse(escape_string_newlines(code), mode="eval")
     call = tree.body
@@ -112,6 +131,11 @@ def parse_native(raw: str, width: int, height: int) -> dict:
         if keyword.arg is None or keyword.arg in kwargs:
             raise ValueError("Expanded or duplicate keyword arguments are not allowed")
         kwargs[keyword.arg] = ast.literal_eval(keyword.value)
+    if label:
+        expected = ACTION_LABELS[label]
+        actual = "finish" if call.func.id == "finish" else kwargs.get("action")
+        if actual != expected:
+            raise ValueError("AutoGLM action label does not match the native action")
     reason = re.sub(r"</?(?:think|answer)>", "", raw.split(code)[0]).strip()[-2000:]
 
     def result(name, arguments, sensitive=False):
@@ -195,11 +219,15 @@ class AutoGLMPlanner:
             headers["Authorization"] = "Bearer " + self.api_key
         request = urllib.request.Request(self.endpoint, data=json.dumps(payload).encode(), headers=headers)
         with urllib.request.urlopen(request, timeout=self.timeout) as response:
-            answer = json.load(response)["choices"][0]["message"]["content"]
+            response_body = json.load(response)
+        choice = response_body["choices"][0]
+        answer = choice["message"]["content"]
         if not isinstance(answer, str):
             raise ValueError("AutoGLM returned no textual native action")
         Path(observation.path).with_suffix(".model.json").write_text(
-            json.dumps({"model": self.model, "raw_output": answer}, ensure_ascii=False, indent=2) + "\n",
+            json.dumps({"model": self.model, "raw_output": answer,
+                        "finish_reason": choice.get("finish_reason"),
+                        "usage": response_body.get("usage")}, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
         action = parse_native(answer, self.width, self.height)
