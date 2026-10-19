@@ -156,4 +156,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    from agent_common import use_certifi_if_needed
+    use_certifi_if_needed()  # HTTPS model APIs on a python.org Python
     raise SystemExit(main())

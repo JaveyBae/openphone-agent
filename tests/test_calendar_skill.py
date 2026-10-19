@@ -150,7 +150,12 @@ class AgendaSkillTest(unittest.TestCase):
         from event_params import DayParams
         ui = Mock()
         ui.snapshot.side_effect = [[{"id": runner.GCAL + "floating_action_button"}]] + snapshots
-        with patch.object(runner, "PrivateUiClient", return_value=ui), patch.object(runner.time, "sleep"):
+        class Today(runner.datetime):  # the skill reads the clock: pin it to the fixture's week
+            @classmethod
+            def now(cls, tz=None):
+                return runner.datetime(2026, 10, 16, 9, 0, tzinfo=tz)
+        with patch.object(runner, "PrivateUiClient", return_value=ui), patch.object(runner.time, "sleep"), \
+                patch.object(runner, "datetime", Today):
             return runner.run_skill(Mock(), runner.load_skill("google_calendar_read_day"), DayParams(day), lambda _: None), ui
 
     def nodes(self, items):

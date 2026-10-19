@@ -43,6 +43,22 @@ class Observation:
     display_id: int
 
 
+def use_certifi_if_needed() -> None:
+    """HTTPS model APIs (e.g. open.bigmodel.cn) on a python.org Python, which ships without CA certificates.
+
+    Only when the system default CA file is missing and the user set nothing: then certifi's bundle.
+    """
+    import os
+    import ssl
+    if os.environ.get("SSL_CERT_FILE") or Path(ssl.get_default_verify_paths().cafile or "/nonexistent").is_file():
+        return
+    try:
+        import certifi
+    except ImportError:
+        return
+    os.environ["SSL_CERT_FILE"] = certifi.where()
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
