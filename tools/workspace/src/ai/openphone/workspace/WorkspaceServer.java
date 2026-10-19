@@ -27,6 +27,7 @@ public final class WorkspaceServer {
     private static final String DIRECTORY = "/data/local/tmp/openphone-workspace";
     // Android 15 AOSP DisplayManager flags, distinct from Display.getFlags().
     private static final int VD_TOUCH = 1 << 6;
+    private static final int VD_DESTROY_ON_REMOVAL = 1 << 8;
     private static final int VD_TRUSTED = 1 << 10;
     private static final int VD_OWN_FOCUS = 1 << 14;
     private static final int VD_NO_TOP_FOCUS_STEAL = 1 << 16;
@@ -75,7 +76,7 @@ public final class WorkspaceServer {
         int flags = DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC
                 | DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
                 | DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION
-                | VD_TOUCH | VD_TRUSTED | VD_OWN_FOCUS | VD_NO_TOP_FOCUS_STEAL;
+                | VD_TOUCH | VD_DESTROY_ON_REMOVAL | VD_TRUSTED | VD_OWN_FOCUS | VD_NO_TOP_FOCUS_STEAL;
         display = context.getSystemService(DisplayManager.class).createVirtualDisplay(
                 "OpenPhone Isolated Workspace " + session, WIDTH, HEIGHT, 320,
                 reader.getSurface(), flags);

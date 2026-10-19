@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import shlex
@@ -11,7 +12,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from agent_loop import locate_adb, workspace_is_isolated
+from android_device import locate_adb, workspace_is_isolated
 
 ROOT = Path(__file__).resolve().parents[1]
 DEVICE_DIRECTORY = "/data/local/tmp/openphone-workspace"
@@ -52,17 +53,34 @@ def build_server() -> Path:
     classes, dex = build / "classes", build / "dex"
     classes.mkdir(parents=True, exist_ok=True)
     dex.mkdir(parents=True, exist_ok=True)
-    source = ROOT / "tools/workspace/src/ai/openphone/workspace/WorkspaceServer.java"
+    sources = sorted((ROOT / "tools/workspace/src/ai/openphone/workspace").glob("*.java"))
+    target = build / "workspace-server.jar"
+    digest = hashlib.sha256(b"".join(p.name.encode() + b"\0" + p.read_bytes() for p in sources)).hexdigest()
+    stamp = build / "sources.sha256"
+    if target.is_file() and stamp.is_file() and stamp.read_text().strip() == digest:
+        return target  # sources unchanged since the last successful build
     subprocess.run([str(jdk / "bin/javac"), "-source", "8", "-target", "8",
-                    "-classpath", str(android_jar), "-d", str(classes), str(source)], check=True)
+                    "-classpath", str(android_jar), "-d", str(classes), *map(str, sources)], check=True)
     compiled = build / "classes.jar"
     subprocess.run([str(jdk / "bin/jar"), "cf", str(compiled), "-C", str(classes), "."], check=True)
     subprocess.run([str(d8), "--min-api", "35", "--lib", str(android_jar),
                     "--output", str(dex), str(compiled)], check=True,
                    env={**os.environ, "JAVA_HOME": str(jdk)})
-    target = build / "workspace-server.jar"
     subprocess.run([str(jdk / "bin/jar"), "cf", str(target), "-C", str(dex), "classes.dex"], check=True)
+    stamp.write_text(digest + "\n")
     return target
+
+
+def install_text_helper() -> str:
+    """Update the JAR without restarting the live display or its app tasks."""
+    target = build_server()
+    device_jar = DEVICE_DIRECTORY + "/private-text.jar"
+    # Re-push unless the device copy is byte-identical (checked every time).
+    local = hashlib.sha256(target.read_bytes()).hexdigest()
+    remote = adb_command("shell", "sha256sum", device_jar, check=False).stdout.split()
+    if not remote or remote[0] != local:
+        adb_command("push", str(target), device_jar)
+    return device_jar
 
 
 def notify_app(state: dict) -> None:
@@ -89,20 +107,23 @@ def ensure_running() -> dict:
         adb_command("shell", "chmod", "700", DEVICE_DIRECTORY)
         device_jar = DEVICE_DIRECTORY + "/workspace-server.jar"
         adb_command("push", str(target), device_jar)
-        logs = ROOT / "runs/runtime"
-        logs.mkdir(parents=True, exist_ok=True)
-        with (logs / "workspace.log").open("ab") as output:
-            subprocess.Popen([locate_adb(), "shell",
-                              "CLASSPATH=" + shlex.quote(device_jar), "app_process", "/", SERVER_CLASS],
-                             stdin=subprocess.DEVNULL, stdout=output, stderr=output,
-                             start_new_session=True)
+        # Detach on the device, not merely on the host. An attached adb shell
+        # receives SIGHUP when its host process/session exits and loses the VD.
+        adb_command("shell", device_launch_command(device_jar))
         for _ in range(30):
             time.sleep(0.2)
             state = live_state()
             if state:
                 notify_app(state)
                 return state
-        raise RuntimeError("Workspace did not start with isolated focus; inspect runs/runtime/workspace.log")
+        raise RuntimeError("Workspace did not start with isolated focus; inspect " + DEVICE_DIRECTORY + "/workspace.log")
+
+
+def device_launch_command(device_jar: str) -> str:
+    return ("CLASSPATH=" + shlex.quote(device_jar)
+            + " nohup app_process / " + shlex.quote(SERVER_CLASS)
+            + " >" + shlex.quote(DEVICE_DIRECTORY + "/workspace.log")
+            + " 2>&1 </dev/null &")
 
 
 def stop() -> None:

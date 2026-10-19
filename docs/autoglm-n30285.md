@@ -129,9 +129,12 @@ unchanged. Terminating the supervised tunnel also caused launchd to replace its
 process and restore `/v1/models`, while the bridge remained running and did not
 replay the completed task. This tests process recovery, not every network outage.
 
-Chinese text entry via ADB is not supported by this adapter yet and pauses for
-the owner. ASCII input refuses to run unless the private display owns input
-focus. Arbitrary third-party tasks may migrate or reuse an owner task; same-app
+Chinese/Unicode `Type` is supported through the shell-authorized, private-window
+`ACTION_SET_TEXT` helper, with exact readback, session checks and no IME or
+clipboard mutation. A focused, accessible non-password editor is required;
+unsupported/custom editors still stop. ASCII remains display-scoped key input.
+Both channels require private window focus while global focus stays on the
+owner's Display 0. Arbitrary third-party tasks may migrate or reuse an owner task; same-app
 launch conflicts stop safely. Full simultaneous keyboard/focus isolation and
 shopping-app private-display compatibility are **not** proven by this integration.
 

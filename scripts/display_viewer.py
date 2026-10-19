@@ -16,7 +16,7 @@ from typing import Any
 
 from PIL import Image, ImageTk
 
-from agent_loop import AndroidController, locate_adb, private_frame_command
+from android_device import AndroidController, locate_adb, private_frame_command
 
 
 @dataclass(frozen=True)

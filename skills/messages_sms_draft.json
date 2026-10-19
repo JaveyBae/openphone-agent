@@ -1,0 +1,75 @@
+{
+  "name": "messages_sms_draft",
+  "title": "短信草稿",
+  "app": "com.google.android.apps.messaging",
+  "learned_from": "Google Messages controls read on the private display 2026-10-15; earlier model-built draft for 183492",
+  "ui_language": "English (en-US labels such as 'Start chat', 'Send to 555-0100', 'Text message')",
+  "params": {
+    "number": "digits exactly as the owner wrote",
+    "body": "text after 内容是/说/告诉他"
+  },
+  "safety": "draft only: the device helper refuses any send/delete control in Messages; an existing different draft is never overwritten",
+  "commit_step": null,
+  "handoff": "短信草稿已写好，未发送。收件人 {number}，正文：{body}\n请在 Messages 核对号码和正文后，由你手动发送。",
+  "steps": [
+    {
+      "op": "wait_for",
+      "label": "等待短信首页加载",
+      "seconds": 10,
+      "select": {
+        "id": "com.google.android.apps.messaging:id/start_chat_fab"
+      }
+    },
+    {
+      "op": "click",
+      "label": "点「新建对话」",
+      "select": {
+        "id": "com.google.android.apps.messaging:id/start_chat_fab"
+      }
+    },
+    {
+      "op": "wait_for",
+      "label": "等待收件人输入框",
+      "seconds": 5,
+      "select": {
+        "class": "android.widget.EditText"
+      },
+      "settle": 1.5
+    },
+    {
+      "op": "pick_recipient",
+      "label": "填写并选择收件人",
+      "select": {
+        "class": "android.widget.EditText"
+      }
+    },
+    {
+      "op": "write_draft",
+      "label": "写入短信正文",
+      "select": {
+        "id": "com.google.android.apps.messaging:id/compose_message_text"
+      },
+      "empty_texts": [
+        "Text message",
+        "SMS message",
+        "RCS message"
+      ]
+    },
+    {
+      "op": "verify",
+      "label": "核对收件人和正文",
+      "expect": [
+        {
+          "select": {
+            "id": "com.google.android.apps.messaging:id/compose_message_text"
+          },
+          "text": "{body}"
+        }
+      ]
+    },
+    {
+      "op": "verify_recipient",
+      "label": "确认收件人号码"
+    }
+  ]
+}

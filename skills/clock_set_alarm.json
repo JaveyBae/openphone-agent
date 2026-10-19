@@ -1,0 +1,18 @@
+{
+  "name": "clock_set_alarm",
+  "title": "设置闹钟",
+  "app": "com.google.android.deskclock",
+  "learned_from": "AlarmClock.ACTION_SET_ALARM with SKIP_UI on the private display, checked with dumpsys alarm 2026-10-16",
+  "params": {
+    "time": "HH:MM from rules (scripts/alarm_params.py)",
+    "days": "optional repeat days (Calendar.SUNDAY = 1 ... SATURDAY = 7)",
+    "label": "「quoted」 text, 起床, or OpenPhone 闹钟"
+  },
+  "unsupported": "a day other than the next occurrence of that time, and times without 早上/晚上: the owner is asked, nothing is set",
+  "commit_step": "set_alarm",
+  "read_only": false,
+  "steps": [
+    {"op": "set_alarm", "label": "设置闹钟"},
+    {"op": "verify_alarm", "label": "在系统闹钟列表中核对"}
+  ]
+}

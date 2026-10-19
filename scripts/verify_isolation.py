@@ -11,7 +11,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from agent_loop import AndroidController, locate_adb
+from android_device import AndroidController, locate_adb
 from workspace_runtime import ensure_running
 
 

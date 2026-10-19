@@ -1,0 +1,97 @@
+{
+  "name": "gmail_draft",
+  "title": "Gmail 邮件草稿",
+  "app": "com.google.android.gm",
+  "learned_from": "model-built wedding-invitation draft (runs/20261015-063651); compose controls re-read on the private display 2026-10-15",
+  "ui_language": "English (en-US labels such as 'Compose', 'Compose email', 'Recipients: …')",
+  "params": {
+    "to": "one complete address from the owner",
+    "subject": "owner's subject, or a short model proposal",
+    "body": "text after 内容是/告诉他"
+  },
+  "safety": "draft only: the device helper refuses Send/Schedule/Delete/Archive in Gmail; the owner sends manually",
+  "commit_step": null,
+  "handoff": "邮件草稿已写好，未发送。\n收件人：{to}\n主题：{subject}\n正文：{body}\n请点「接管到主屏」在 Gmail 核对后由你手动发送。",
+  "steps": [
+    {
+      "op": "wait_for",
+      "label": "等待 Gmail 收件箱加载",
+      "seconds": 10,
+      "select": {
+        "id": "com.google.android.gm:id/compose_button"
+      }
+    },
+    {
+      "op": "click",
+      "label": "点「写邮件」",
+      "select": {
+        "id": "com.google.android.gm:id/compose_button"
+      }
+    },
+    {
+      "op": "wait_for",
+      "label": "等待写信页面",
+      "seconds": 5,
+      "select": {
+        "id": "com.google.android.gm:id/to_prefix_text"
+      },
+      "settle": 1.0
+    },
+    {
+      "op": "type_keys",
+      "label": "填写收件人",
+      "value": "{to}"
+    },
+    {
+      "op": "click",
+      "label": "确认收件人",
+      "select": {
+        "class": "android.widget.TextView",
+        "text": "{to}"
+      }
+    },
+    {
+      "op": "wait_for",
+      "label": "等待主题栏",
+      "seconds": 3,
+      "select": {
+        "id": "com.google.android.gm:id/subject"
+      }
+    },
+    {
+      "op": "text",
+      "label": "填写主题",
+      "select": {
+        "id": "com.google.android.gm:id/subject"
+      },
+      "value": "{subject}",
+      "skip_if_empty": true
+    },
+    {
+      "op": "text",
+      "label": "填写正文",
+      "select": {
+        "class": "android.widget.EditText",
+        "text": "Compose email"
+      },
+      "value": "{body}"
+    },
+    {
+      "op": "verify",
+      "label": "核对收件人、主题和正文",
+      "expect": [
+        {
+          "select": {
+            "descriptionStartsWith": "Recipients: {to}"
+          }
+        },
+        {
+          "select": {
+            "class": "android.widget.EditText",
+            "text": "{body}"
+          }
+        }
+      ]
+    }
+  ]
+}

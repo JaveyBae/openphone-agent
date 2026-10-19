@@ -9,12 +9,15 @@
 
     <application
         android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
         android:label="OpenPhone Agent"
         android:supportsRtl="true"
         android:theme="@style/Theme.OpenPhoneAgent">
 
         <activity
             android:name=".MainActivity"
+            android:label="OpenPhone"
             android:exported="true"
             android:windowSoftInputMode="adjustResize"
             android:resizeableActivity="true">

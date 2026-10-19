@@ -3,11 +3,14 @@ package ai.openphone.agent;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.hardware.display.DisplayManager;
 import android.view.Display;
 import android.util.Base64;
 
 import java.nio.charset.StandardCharsets;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 /** Receives task progress from the authorized host-side controller. */
 public class AgentResultReceiver extends BroadcastReceiver {
@@ -19,6 +22,9 @@ public class AgentResultReceiver extends BroadcastReceiver {
     public static final String KEY_STATUS = "status";
     public static final String KEY_MESSAGE = "message";
     public static final String KEY_MESSAGE_BASE64 = "message_b64";
+    public static final String KEY_STAGE = "stage";
+    public static final String KEY_PROGRESS = "progress_events";
+    public static final String KEY_UPDATED_AT = "updated_at";
 
     @Override
     public void onReceive(Context context, Intent intent) {
@@ -61,11 +67,40 @@ public class AgentResultReceiver extends BroadcastReceiver {
         if (taskId == null || taskId.isBlank() || status == null || status.isBlank()) {
             return;
         }
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        String currentId = prefs.getString(KEY_TASK_ID, "");
+        String currentStatus = prefs.getString(KEY_STATUS, "");
+        if (!currentId.isEmpty() && !currentId.equals(taskId)
+                && ("queued".equals(currentStatus) || "running".equals(currentStatus))) {
+            return; // An older task must not overwrite a newly submitted task.
+        }
+        String stage = intent.getStringExtra(KEY_STAGE);
+        long now = System.currentTimeMillis();
+        JSONArray events = new JSONArray();
+        try {
+            if (taskId.equals(currentId)) {
+                events = new JSONArray(prefs.getString(KEY_PROGRESS, "[]"));
+            }
+            String value = message == null ? "" : message;
+            JSONObject last = events.length() == 0 ? null : events.optJSONObject(events.length() - 1);
+            if ("running".equals(status) && (last == null || !value.equals(last.optString("message")))) {
+                events.put(new JSONObject().put("message", value.substring(0, Math.min(250, value.length())))
+                        .put("at", now));
+            }
+            if (events.length() > 80) {
+                JSONArray recent = new JSONArray();
+                for (int i = events.length() - 80; i < events.length(); i++) recent.put(events.get(i));
+                events = recent;
+            }
+        } catch (Exception ignored) { events = new JSONArray(); }
+        prefs
                 .edit()
                 .putString(KEY_TASK_ID, taskId)
                 .putString(KEY_STATUS, status)
                 .putString(KEY_MESSAGE, message == null ? "" : message)
+                .putString(KEY_STAGE, stage == null ? "" : stage)
+                .putString(KEY_PROGRESS, events.toString())
+                .putLong(KEY_UPDATED_AT, now)
                 .apply();
     }
 }

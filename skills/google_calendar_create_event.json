@@ -1,0 +1,133 @@
+{
+  "name": "google_calendar_create_event",
+  "title": "Google 日历建日程",
+  "app": "com.google.android.calendar",
+  "learned_from": "runs/20261015-080154 (model-built 团队站会), controls re-verified on the private display 2026-10-15",
+  "ui_language": "English (en-US labels such as 'Save', 'Start time: 10:00 AM')",
+  "params": {
+    "title": "owner's words",
+    "date": "YYYY-MM-DD",
+    "start": "HH:MM",
+    "end": "HH:MM"
+  },
+  "unsupported": "location, guests, reminders, repeat, all-day: these fall back to step-by-step model control",
+  "commit_step": "save",
+  "steps": [
+    {
+      "op": "wait_for",
+      "label": "等待日历首页加载",
+      "seconds": 10,
+      "select": {
+        "id": "com.google.android.calendar:id/floating_action_button"
+      }
+    },
+    {
+      "op": "click",
+      "label": "打开日历菜单",
+      "select": {
+        "description": "Show Calendar List and Settings drawer"
+      }
+    },
+    {
+      "op": "click",
+      "label": "切换到日程列表视图",
+      "select": {
+        "id": "com.google.android.calendar:id/label",
+        "text": "Schedule"
+      }
+    },
+    {
+      "op": "check_absent",
+      "label": "检查同一时间是否已有日程",
+      "select": {
+        "descriptionStartsWith": "{title}, {start_ui} – {end_ui}"
+      }
+    },
+    {
+      "op": "click",
+      "label": "点「+」新建",
+      "select": {
+        "id": "com.google.android.calendar:id/floating_action_button"
+      }
+    },
+    {
+      "op": "click",
+      "label": "选择 Event",
+      "select": {
+        "description": "Event button"
+      }
+    },
+    {
+      "op": "text",
+      "label": "填写标题",
+      "select": {
+        "id": "com.google.android.calendar:id/title"
+      },
+      "value": "{title}"
+    },
+    {
+      "op": "pick_date",
+      "label": "选择日期",
+      "field": "Start date: "
+    },
+    {
+      "op": "set_time",
+      "label": "设置开始时间",
+      "field": "Start time: ",
+      "value": "start"
+    },
+    {
+      "op": "set_time",
+      "label": "设置结束时间",
+      "field": "End time: ",
+      "value": "end"
+    },
+    {
+      "op": "verify",
+      "label": "保存前核对全部字段",
+      "expect": [
+        {
+          "select": {
+            "id": "com.google.android.calendar:id/title"
+          },
+          "text": "{title}"
+        },
+        {
+          "select": {
+            "description": "Start date: {date_ui}"
+          }
+        },
+        {
+          "select": {
+            "description": "Start time: {start_label}"
+          }
+        },
+        {
+          "select": {
+            "description": "End date: {date_ui}"
+          }
+        },
+        {
+          "select": {
+            "description": "End time: {end_label}"
+          }
+        }
+      ]
+    },
+    {
+      "op": "click",
+      "id": "save",
+      "label": "点 Save 保存",
+      "select": {
+        "id": "com.google.android.calendar:id/save"
+      }
+    },
+    {
+      "op": "verify_saved",
+      "label": "在日历中确认已保存",
+      "select": {
+        "descriptionStartsWith": "{title}, {start_ui} – {end_ui}"
+      }
+    }
+  ]
+}

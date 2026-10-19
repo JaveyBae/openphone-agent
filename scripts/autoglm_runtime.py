@@ -29,7 +29,7 @@ def definitions():
          "-o", "ServerAliveCountMax=2", "-L", "127.0.0.1:18085:127.0.0.1:18085", "n30285"],
         [python, "-u", str(ROOT / "scripts/chat_bridge.py"), "--provider", "autoglm",
          "--base-url", "http://127.0.0.1:18085/v1", "--model", "autoglm-phone-9b-multilingual",
-         "--runs-dir", str(ROOT / "runs"), "--max-steps", "15"],
+         "--runs-dir", str(ROOT / "runs"), "--max-steps", "25"],
     ]
     for label, command in zip(LABELS, commands):
         yield label, {

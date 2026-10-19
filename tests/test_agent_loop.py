@@ -1,16 +1,19 @@
 import importlib.util
 import sys
 import unittest
+import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 
 MODULE_PATH = Path(__file__).parents[1] / "scripts" / "agent_loop.py"
+sys.path.insert(0, str(MODULE_PATH.parent))
 SPEC = importlib.util.spec_from_file_location("agent_loop", MODULE_PATH)
 agent_loop = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 sys.modules[SPEC.name] = agent_loop
 SPEC.loader.exec_module(agent_loop)
+import agent_session  # noqa: E402  (the run loop; tests patch its log_event)
 
 
 class ParseActionTest(unittest.TestCase):
@@ -103,6 +106,7 @@ class WorkspaceInitializationTest(unittest.TestCase):
         self.assertFalse(controller.prepare_workspace("https://example.com", allow_initialize=True))
         controller.execute.assert_not_called()
 
+
     def test_observe_only_never_initializes_empty_display(self):
         controller = self.controller([False, False])
         with self.assertRaises(agent_loop.AgentError):
@@ -143,6 +147,49 @@ class WorkspaceInitializationTest(unittest.TestCase):
         with self.assertRaises(agent_loop.AgentError):
             controller.prepare_workspace("https://example.com", allow_initialize=True)
         controller.execute.assert_not_called()
+
+
+class SMSReplanTest(unittest.TestCase):
+    def exercise(self, actions, outcomes):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        args = agent_loop.build_parser().parse_args([
+            "--goal", "给183492发短信，内容是：晚会儿到。", "--provider", "mock",
+            "--dry-run", "--runs-dir", directory.name, "--max-steps", "6"])
+        controller = Mock()
+        controller.require_display.return_value = 7
+        controller.prepare_workspace.return_value = False
+        controller.capture.side_effect = lambda p: agent_loop.Observation(p, "private-frame", 7)
+        controller.execute.side_effect = [None, *outcomes]
+        planner = Mock()
+        planner.next_action.side_effect = actions
+        with patch.object(agent_loop, "locate_adb", return_value="unused"), \
+             patch.object(agent_loop, "AndroidController", return_value=controller), \
+             patch.object(agent_loop, "MockPlanner", return_value=planner), \
+             patch.object(agent_session, "log_event"), patch.object(agent_loop.time, "sleep"):
+            return agent_loop.run(args), planner, controller
+
+    def test_unknown_control_replans_then_can_take_safe_back_route(self):
+        result, planner, controller = self.exercise([
+            {"action": "tap", "arguments": {"x": 661, "y": 188}},
+            {"action": "key", "arguments": {"keycode": 4}},
+            {"action": "request_user", "arguments": {"message": "请核对号码"}},
+        ], [agent_loop.SMSControlBlocked("rejected without click"), None])
+        self.assertEqual(2, result)
+        history = planner.next_action.call_args_list[-1].args[2]
+        self.assertEqual("blocked_unknown_control", history[0]["result"])
+        self.assertIs(False, history[0]["executed"])
+        self.assertEqual(3, controller.execute.call_count)
+
+    def test_send_or_focus_failures_never_replan(self):
+        with self.assertRaisesRegex(agent_loop.AgentError, "send control"):
+            self.exercise([{"action": "tap", "arguments": {"x": 650, "y": 1200}}],
+                          [agent_loop.AgentError("send control")])
+
+    def test_different_unknown_controls_still_have_two_replan_limit(self):
+        with self.assertRaisesRegex(agent_loop.AgentError, "replan limit"):
+            self.exercise([{"action": "tap", "arguments": {"x": x, "y": 188}} for x in (660, 661, 662)],
+                          [agent_loop.SMSControlBlocked("rejected")] * 3)
 
 
 if __name__ == "__main__":

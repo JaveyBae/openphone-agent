@@ -1,0 +1,56 @@
+{
+  "name": "gmail_find_email",
+  "title": "Gmail 查找并读取邮件",
+  "app": "com.google.android.gm",
+  "learned_from": "Gmail search and result rows read on the private display 2026-10-16",
+  "ui_language": "English (en-US labels such as 'Search in mail')",
+  "params": {
+    "query": "Gmail search query, always in:anywhere so spam is included"
+  },
+  "safety": "read-only: only the searched results are read; nothing is moved, deleted or replied to",
+  "commit_step": null,
+  "read_only": true,
+  "steps": [
+    {
+      "op": "wait_for",
+      "label": "等待 Gmail 加载",
+      "seconds": 12,
+      "select": {
+        "id": "com.google.android.gm:id/open_search"
+      }
+    },
+    {
+      "op": "click",
+      "label": "打开邮件搜索",
+      "select": {
+        "id": "com.google.android.gm:id/open_search"
+      }
+    },
+    {
+      "op": "wait_for",
+      "label": "等待搜索框",
+      "seconds": 4,
+      "select": {
+        "id": "com.google.android.gm:id/open_search_view_edit_text"
+      }
+    },
+    {
+      "op": "text",
+      "label": "输入搜索条件",
+      "select": {
+        "id": "com.google.android.gm:id/open_search_view_edit_text"
+      },
+      "value": "{query}"
+    },
+    {
+      "op": "key",
+      "label": "开始搜索",
+      "keycode": 66
+    },
+    {
+      "op": "read_mail",
+      "label": "读取搜索结果",
+      "seconds": 25
+    }
+  ]
+}

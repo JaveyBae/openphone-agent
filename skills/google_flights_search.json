@@ -1,0 +1,33 @@
+{
+  "name": "google_flights_search",
+  "title": "Google 航班查机票",
+  "app": "ai.openphone.agent",
+  "learned_from": "Google Flights result cards read in the Agent browser on the private display 2026-10-16",
+  "ui_language": "zh-CN, prices in CHF (hl=zh-CN&curr=CHF)",
+  "params": {
+    "origin": "city (Chinese name mapped to an IATA airport in scripts/flight_params.py)",
+    "destination": "city",
+    "date": "YYYY-MM-DD"
+  },
+  "unsupported": "round trips, unknown airports (a text query link is used instead) and pages that do not settle: fall back to step-by-step model control",
+  "commit_step": null,
+  "read_only": true,
+  "steps": [
+    {
+      "op": "open_url",
+      "label": "打开 Google 航班搜索结果",
+      "url": "https://www.google.com/travel/flights/search?hl=zh-CN&curr=CHF&tfs={tfs}"
+    },
+    {
+      "op": "order_check",
+      "label": "检查 Cookie、登录和预订页面"
+    },
+    {
+      "op": "read_flights",
+      "label": "读取航班列表",
+      "select": {
+        "descriptionStartsWith": "起价："
+      }
+    }
+  ]
+}

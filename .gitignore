@@ -11,3 +11,9 @@ runs/
 __pycache__/
 *.py[cod]
 .DS_Store
+experiences/
+tmp/
+teacher_data/
+# local working notes (paths, session history)
+CLAUDE.md
+docs/HANDOFF.md
