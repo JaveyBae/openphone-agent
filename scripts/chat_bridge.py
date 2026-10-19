@@ -30,7 +30,7 @@ RECEIVER = f"{PACKAGE}/.AgentResultReceiver"
 TASK_PATH = "files/chat/pending.json"
 TAKEOVER_PATH = "files/chat/takeover.json"
 TAKEOVER_RESULT_PATH = "files/chat/takeover-result.json"
-TAKEOVER_MAX_AGE_MS = 120_000
+TAKEOVER_MAX_AGE_MS = 600_000  # 10 min: a request the owner taps a while after the task paused stays valid
 APP_LABELS = {"com.google.android.gm": "Gmail", "com.google.android.apps.messaging": "短信",
               "com.google.android.calendar": "Google 日历", "org.fossify.calendar": "离线日历",
               "com.google.android.permissioncontroller": "系统权限申请", "com.jingdong.app.mall": "京东",

@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
-from chat_bridge import Bridge, failure_message, progress_message, result_summary
+from chat_bridge import Bridge, failure_message, progress_message, result_summary, valid_takeover, TAKEOVER_MAX_AGE_MS
 from execution_progress import PREFIX
 
 
@@ -85,6 +85,18 @@ class ProgressMessageTest(unittest.TestCase):
         args = bridge.adb_run.call_args.args
         self.assertNotIn("", args)
         self.assertIn("message_b64", args)
+
+class TakeoverExpiryTest(unittest.TestCase):
+    def test_a_request_tapped_minutes_after_the_pause_is_still_valid(self):
+        import uuid
+        now = 1_792_000_000_000
+        rid = str(uuid.uuid4())
+        # Five minutes after the task paused: still honored (owners do not tap instantly).
+        self.assertTrue(valid_takeover({"id": rid, "requestedAt": now - 5 * 60_000}, set(), now))
+        # Past the window, or already handled, or not a UUID: rejected.
+        self.assertFalse(valid_takeover({"id": rid, "requestedAt": now - TAKEOVER_MAX_AGE_MS - 1}, set(), now))
+        self.assertFalse(valid_takeover({"id": rid, "requestedAt": now}, {rid}, now))
+        self.assertFalse(valid_takeover({"id": "not-a-uuid", "requestedAt": now}, set(), now))
 
 
 if __name__ == "__main__":

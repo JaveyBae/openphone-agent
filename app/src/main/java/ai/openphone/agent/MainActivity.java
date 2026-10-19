@@ -1050,8 +1050,8 @@ public class MainActivity extends Activity {
                 }
             }
         } catch (Exception ignored) { }
-        if (message == null && System.currentTimeMillis() - pendingTakeoverAt > 20_000) {
-            message = "电脑端没有响应接管请求，可能 bridge 未运行；窗口没有移动。";
+        if (message == null && System.currentTimeMillis() - pendingTakeoverAt > 15_000) {
+            message = "接管暂时没有响应（电脑端可能在忙或未运行），窗口没有移动。请再点一次「接管到主屏」重试。";
         }
         if (message == null) return;
         pendingTakeoverId = null;
