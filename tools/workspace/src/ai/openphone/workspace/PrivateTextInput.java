@@ -381,9 +381,29 @@ public final class PrivateTextInput {
             if (hasPickerTitle(root, 0, new int[]{0})) return true;
         }
         if (id.contains("send") || label.contains("send") || label.contains("发送")) return false;
+        if (recipientSuggestion(node)) return true;
         if (saveBannerClose(node)) return true;
         return node.isEditable() || id.matches(".*(?:recipient|contact|start_chat|new_conversation|conversation_list|compose_message_text|message_text|draft).*")
                 || label.matches("(?:start chat|new message|next|done|navigate up|back|开始聊天|新建信息|下一步|完成|返回)");
+    }
+
+    /** A contact row in the New-conversation suggestion list: tapping it only sets the recipient.
+     *  Requires the ContactSuggestionList parent and a phone-label child, so no stray control matches;
+     *  a Send id/label is rejected before this is reached. */
+    private static boolean recipientSuggestion(AccessibilityNodeInfo node) {
+        if (node.isEditable()) return false;
+        AccessibilityNodeInfo parent = node.getParent();
+        String parentId = parent == null ? "" : String.valueOf(parent.getViewIdResourceName()).toLowerCase(java.util.Locale.ROOT);
+        if (!parentId.contains("contactsuggestionlist") && !parentId.contains("suggestion")) return false;
+        boolean phoneLabel = false;
+        for (int i = 0; i < node.getChildCount() && i < 10; i++) {
+            AccessibilityNodeInfo child = node.getChild(i);
+            if (child == null || child.getText() == null) continue;
+            String text = child.getText().toString().trim();
+            if (text.matches("(?i)(Mobile|Home|Work|Main|Other|Phone|\u624b\u673a|\u7535\u8bdd) [()+0-9 -]{3,30}")
+                    || text.matches("[()+][0-9 ()-]{5,25}")) phoneLabel = true;
+        }
+        return phoneLabel;
     }
 
     private static boolean saveBannerClose(AccessibilityNodeInfo node) {
