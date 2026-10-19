@@ -2,7 +2,9 @@
 
 **你照常用手机，Agent 在同一台手机的「后台独立屏幕」上替你操作真实 App。** 你的前台画面、焦点和键盘始终是你自己的；需要你本人决定的事（付款、登录、协议、权限、发送），Agent 停下来交给你。
 
-▶️ **[演示视频（2 分钟，中文字幕）](https://github.com/JaveyBae/openphone-agent/releases/download/v0.1-demo/openphone-demo.mp4)**：左边是 Agent 的后台屏，右边是用户的主屏。任务一用 12306 查火车票（2 倍速），任务二用一句口语写 Gmail 邮件，写好后交给用户接管、由用户自己发送（1.25 倍速）。
+▶️ **[演示视频（YouTube，2 分钟，中文字幕）](https://www.youtube.com/watch?v=2Jtdmli2-1E)**：左边是 Agent 的后台屏，右边是用户的主屏。任务一用 12306 查火车票（2 倍速），任务二用一句口语写 Gmail 邮件，写好后交给用户接管、由用户自己发送（1.25 倍速）。看不了 YouTube 时可以[下载 MP4](https://github.com/JaveyBae/openphone-agent/releases/download/v0.1-demo/openphone-demo.mp4)。
+
+[![OpenPhone 演示视频](https://img.youtube.com/vi/2Jtdmli2-1E/hqdefault.jpg)](https://www.youtube.com/watch?v=2Jtdmli2-1E)
 
 - 每一步都由视觉模型看屏幕决定（默认 Qwen3.8-27B，也支持 AutoGLM-Phone-9B），不是回放脚本。
 - 做成功过的任务会从**模型自己的真实运行轨迹**里学出经验，下次同类任务直接复用导航步骤，越用越快（实测快 32%，模型调用从 18 次降到 7 次）。
