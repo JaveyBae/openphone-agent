@@ -114,12 +114,13 @@
 ## ⚙️ Agent 是怎么工作的
 
 ```mermaid
+%%{init: {"flowchart": {"htmlLabels": true, "useMaxWidth": true}}}%%
 flowchart TD
-    U["👤 你 · 主屏 Display 0<br/>正常刷信息流、打字"] --> A["📱 OpenPhone App<br/>发任务 · 进度 · 实时画面 · 接管"]
-    A -->|任务| B["💻 bridge + agent loop<br/>安全检查 · 经验 · 结果核对"]
-    B -->|只对后台屏的点击/输入| V["🪟 后台独立屏 Display N<br/>独立焦点 · 不弹键盘<br/>日历 / 通讯录 / Gmail / 短信<br/>时钟 / 12306 / 地图"]
+    U["你 · 主屏 Display 0<br/>正常刷信息流、打字"] --> A["OpenPhone App<br/>发任务 / 进度 / 实时画面 / 接管"]
+    A -->|任务| B["bridge + agent loop<br/>安全检查 / 经验 / 结果核对"]
+    B -->|只对后台屏点击、输入| V["后台独立屏 Display N<br/>独立焦点 / 不弹键盘<br/>日历 通讯录 Gmail 短信<br/>时钟 12306 地图"]
     V -->|仅后台屏截图 + 界面结构| B
-    B <-->|截图 → 下一步动作| M["🧠 Qwen3.8-27B / AutoGLM-Phone<br/>自建 GPU 或智谱 API"]
+    B <-->|截图 / 下一步动作| M["模型 Qwen3.8-27B · AutoGLM-Phone<br/>自建 GPU 或智谱 API"]
     B -->|进度 / 结果 / 需要你确认| A
 ```
 
