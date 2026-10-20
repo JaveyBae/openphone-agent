@@ -61,7 +61,11 @@ def user_text(goal: str, history: list[dict], width: int, height: int) -> str:
     taken = "\n".join(f"{i + 1}. {describe(h['action'], width, height)}"
                       for i, h in enumerate(history) if isinstance(h.get("action"), dict)) or "(none)"
     text = f"Task: {goal}\nActions already taken:\n{taken}"
-    if history and history[-1].get("private_input_focused") is True:
+    if history and isinstance(history[-1].get("told"), str):
+        # A rejected/replanned action looks unchanged on screen; the action list alone made the
+        # model repeat the same blocked tap. Surface why it was not performed and what to do next.
+        text += "\nFeedback: " + history[-1]["told"]
+    elif history and history[-1].get("private_input_focused") is True:
         field = history[-1].get("focused_field")
         # A soft "type if it is the right field" left the 27B model tapping Gmail's Subject again and
         # again; naming the field and the next action works.

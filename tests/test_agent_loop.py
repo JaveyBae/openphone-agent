@@ -177,7 +177,10 @@ class SMSReplanTest(unittest.TestCase):
         ], [agent_loop.SMSControlBlocked("rejected without click"), None])
         self.assertEqual(2, result)
         history = planner.next_action.call_args_list[-1].args[2]
-        self.assertEqual("blocked_unknown_control", history[0]["result"])
+        # The model is told why the tap was rejected and the real compose flow, not a bare code,
+        # so it stops repeating the same blocked spot.
+        self.assertIn("Start chat", history[0]["result"])
+        self.assertIn("NOT performed", history[0]["result"])
         self.assertIs(False, history[0]["executed"])
         self.assertEqual(3, controller.execute.call_count)
 
@@ -186,10 +189,11 @@ class SMSReplanTest(unittest.TestCase):
             self.exercise([{"action": "tap", "arguments": {"x": 650, "y": 1200}}],
                           [agent_loop.AgentError("send control")])
 
-    def test_different_unknown_controls_still_have_two_replan_limit(self):
+    def test_repeatedly_blocked_controls_still_hit_a_replan_limit(self):
+        # Even with actionable feedback, a model that never leaves the blocked controls is stopped.
         with self.assertRaisesRegex(agent_loop.AgentError, "replan limit"):
-            self.exercise([{"action": "tap", "arguments": {"x": x, "y": 188}} for x in (660, 661, 662)],
-                          [agent_loop.SMSControlBlocked("rejected")] * 3)
+            self.exercise([{"action": "tap", "arguments": {"x": x, "y": 188}} for x in (660, 661, 662, 663)],
+                          [agent_loop.SMSControlBlocked("rejected")] * 4)
 
 
 if __name__ == "__main__":

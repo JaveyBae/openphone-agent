@@ -22,6 +22,7 @@ from typing import Any
 from agent_common import PACKAGE, WORKSPACE_DIRECTORY, WORKSPACE_STATE, AgentError
 from android_device import (AndroidController, locate_adb, package_is_resumed, parse_package_displays,
                             workspace_identity)
+from app_targets import split_composite_goal
 from execution_progress import parse_progress, progress_text
 
 
@@ -141,6 +142,9 @@ class Bridge:
         self.last_task_id = self.read_state()
         self.handled_takeovers: set[str] = set()
         self.stop_preview = threading.Event()
+        # A composite "draft THEN another task" goal leaves its second half here when the
+        # draft pauses for takeover; the next successful takeover runs it on the private display.
+        self.continuation: dict[str, Any] | None = None
 
     def adb_run(self, *parts: str, check: bool = True) -> subprocess.CompletedProcess[bytes]:
         return subprocess.run(
@@ -264,6 +268,24 @@ class Bridge:
                  + TAKEOVER_RESULT_PATH)
         subprocess.run([self.adb, "shell", "run-as " + PACKAGE + " sh -c " + shlex.quote(store)],
                        input=result.encode("utf-8"), capture_output=True, timeout=10, check=False)
+        if ok and self.continuation is not None:
+            self.continue_after_takeover(self.continuation)
+
+    def continue_after_takeover(self, continuation: dict[str, Any]) -> None:
+        """The draft is now on the owner's screen; run the rest of a composite task.
+
+        The private display was freed by the takeover (the draft task moved to display 0),
+        so a fresh run opens the next app there without touching what the owner now holds.
+        """
+        self.continuation = None
+        task: dict[str, Any] = {"id": continuation["id"], "goal": continuation["goal"],
+                                "full_goal": continuation.get("full_goal"), "phase": "continue"}
+        if continuation.get("mode"):
+            task["mode"] = continuation["mode"]
+        if continuation.get("observeOnly") is True:
+            task["observeOnly"] = True
+        self.update(str(task["id"]), "running", "短信已交到主屏，请核对后手动发送；我继续去完成后面的部分…")
+        self.run_task(task)
 
     def takeover(self) -> str:
         """Move the paused private app task to the owner's screen, on request only."""
@@ -303,7 +325,16 @@ class Bridge:
 
     def run_task(self, task: dict[str, Any]) -> None:
         task_id = str(task["id"])
-        goal = str(task["goal"])
+        # A "draft THEN another task" request runs in two legs: the draft first, then the rest after
+        # the owner takes the draft to the main screen (see check_takeover). Both legs record and show
+        # the WHOLE request (full_goal); `goal` is only this leg's effective task for routing/guards.
+        phase = task.get("phase")
+        if phase == "continue":
+            goal, full_goal, rest_goal = str(task["goal"]), str(task.get("full_goal") or task["goal"]), None
+        else:
+            full_goal = str(task["goal"])
+            goal, rest_goal = split_composite_goal(full_goal)
+            phase = "draft" if rest_goal else None
         self.last_task_id = task_id
         self.save_state(task_id)  # Never automatically replay an interrupted task after restart.
         if task.get("kind") == "calendar_demo":
@@ -357,6 +388,11 @@ class Bridge:
             goal,
             "--provider",
             self.args.provider,
+        ]
+        if phase:
+            # Keep the whole connected request in the record and in front of the model.
+            command += ["--full-goal", full_goal, "--phase", phase]
+        command += [
             "--runs-dir",
             str(self.args.runs_dir),
             "--max-steps",
@@ -433,8 +469,17 @@ class Bridge:
             self.update(task_id, "completed", message)
         elif return_code == 2:
             # The full multi-line message (with any action marker) lives in run.json.
-            self.update(task_id, "needs_user", run_message(lines, self.args.runs_dir)
-                        or final_line.removeprefix("Paused for user: "))
+            message = (run_message(lines, self.args.runs_dir)
+                       or final_line.removeprefix("Paused for user: "))
+            if rest_goal:
+                # The draft leg paused for takeover; remember the rest so the next successful
+                # takeover continues it on the private display (same task, same card). The whole
+                # request travels along as full_goal so the second leg stays connected, not split.
+                self.continuation = {"id": task_id, "goal": rest_goal, "full_goal": full_goal,
+                                     "phase": "continue", "mode": task.get("mode"),
+                                     "observeOnly": task.get("observeOnly")}
+                message += f"\n点「接管到主屏」把它交给你发送后，我会自动接着去：{rest_goal}"
+            self.update(task_id, "needs_user", message)
         else:
             self.update(task_id, "failed", failure_message(final_line) + close_offer(final_line, goal))
         self.last_task_id = task_id
@@ -459,6 +504,9 @@ class Bridge:
                 self.check_takeover()
                 task = self.read_pending()
                 if task and str(task["id"]) != self.last_task_id:
+                    # A different task arriving means the owner moved on without taking over
+                    # the paused draft; drop its stranded continuation.
+                    self.continuation = None
                     self.run_task(task)
                     if self.args.once:
                         return 0

@@ -66,7 +66,13 @@ __all__ = [
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the private-display agent loop")
-    parser.add_argument("--goal", required=True, help="Natural-language task for the agent")
+    parser.add_argument("--goal", required=True,
+                        help="Task for THIS leg; drives app routing, guards and completion checks")
+    parser.add_argument("--full-goal", default=None,
+                        help="The whole connected request when this leg is one step of it; "
+                             "recorded and shown to the model so the task stays connected, not split")
+    parser.add_argument("--phase", choices=("draft", "continue"), default=None,
+                        help="Which leg of a composite 'draft THEN more' task this is")
     parser.add_argument(
         "--provider",
         choices=("mock", "openai", "autoglm", "qwen"),
@@ -118,6 +124,9 @@ def run(args: argparse.Namespace) -> int:
     args.mode = mode
     # Hand-written skills and rule shortcuts only in the legacy comparison mode.
     args.no_skills = mode != "legacy"
+    # The whole connected request is recorded and shown to the model; --goal stays this leg's
+    # effective task so routing, guards and completion checks act on the right app.
+    args.full_goal = getattr(args, "full_goal", None) or args.goal
     controller = AndroidController(locate_adb(), dry_run=args.dry_run)
     controller.sms_task = is_sms_goal(args.goal)
     controller.sms_allows_calendar = controller.sms_task and bool(CALENDAR_GOAL.search(args.goal))
@@ -128,7 +137,8 @@ def run(args: argparse.Namespace) -> int:
     run_dir.mkdir(parents=True, exist_ok=False)
     log = RunLog(run_dir, {
         "started_at": utc_now(),
-        "goal": args.goal,
+        "goal": args.full_goal,
+        "phase": getattr(args, "phase", None),
         "provider": args.provider,
         "model": args.model or None,
         "base_url": args.base_url if args.provider != "mock" else None,

@@ -18,8 +18,9 @@ from typing import Any
 from action_safety import SEND_TERMS, order_block_message, sensitive_reason, validate_input_text
 from agent_common import PACKAGE, AgentError, MailControlBlocked, OrderPageBlocked, SMSControlBlocked, log_event, utc_now
 from android_device import resumed_package
-from app_targets import (CALENDAR_PACKAGE, GMAIL_PACKAGE, SMS_PACKAGE, is_mail_compose_goal, is_sms_goal,
-                         mail_completion_handoff, mail_draft_goal, sms_completion_handoff, sms_draft_goal)
+from app_targets import (CALENDAR_PACKAGE, GMAIL_PACKAGE, SMS_PACKAGE, continuation_goal, draft_phase_goal,
+                         expected_sms_body, is_mail_compose_goal, is_sms_goal, mail_completion_handoff,
+                         mail_draft_goal, sms_completion_handoff, sms_draft_goal)
 from execution_progress import emit_progress
 from flight_params import parse_flight
 from planners import note_external_step
@@ -135,11 +136,24 @@ class AgentSession:
         self.history: list[dict[str, Any]] = []
         self.loops = LoopGuard()
         self.sms_replans = 0
+        self.sms_body_replans = 0
         self.app_replans = 0
         self.corrections = 0
         self.flight = None
         self.target: str | None = None
-        self.planner_goal = mail_draft_goal(sms_draft_goal(args.goal))
+        # The model always sees the whole connected request. --goal stays this leg's effective task
+        # (so routing/guards act on the right app); full_goal is the connected description to show.
+        full_goal = getattr(args, "full_goal", None) or args.goal
+        phase = getattr(args, "phase", None)
+        if phase == "continue":
+            # The draft was handed off; finish the rest while keeping the full task in view.
+            self.planner_goal = continuation_goal(full_goal, args.goal)
+        elif phase == "draft":
+            # Lead with this leg's draft (body prominent) so the model finishes it; show the whole
+            # task as context so it stays connected. args.goal is the draft leg; full_goal the whole.
+            self.planner_goal = draft_phase_goal(full_goal, args.goal)
+        else:
+            self.planner_goal = mail_draft_goal(sms_draft_goal(args.goal))
         self.recorder = None
         self.replay = None
         self.ui_readers: dict[str, Any] = {}
@@ -390,7 +404,7 @@ class AgentSession:
         event["result"] = result
         self.log.event(event)
         self.history.append({"step": step, "action": action, "screen_changed": False, "result": told or result,
-                             "executed": False, **note})
+                             "told": told, "executed": False, **note})
         emit_progress("replan", step + 1, self.args.max_steps)
 
     def pause(self, event: dict, step: int, message: str, metadata: dict | None = None, **result: Any) -> int:
@@ -399,6 +413,16 @@ class AgentSession:
         self.log.event(event)
         return self.log.pause(message, **(metadata or {}))
 
+    def sms_body_typed(self, body: str) -> bool:
+        """Whether the required message body was typed in some earlier step (not just the recipient)."""
+        for entry in self.history:
+            action = entry.get("action") or {}
+            if isinstance(action, dict) and action.get("action") == "input_text":
+                text = str(action.get("arguments", {}).get("text", "")).strip()
+                if text and (text in body or body in text):
+                    return True
+        return False
+
     def handle_request_user(self, action: dict, event: dict, step: int, model_finished: bool) -> int | None:
         arguments = action["arguments"]
         if arguments.get("unavailable_app") and self.app_replans < 2:
@@ -406,6 +430,25 @@ class AgentSession:
             self.app_replans += 1
             self.replan(event, step, action, "app_unavailable", app=arguments["unavailable_app"])
             return None
+        body = expected_sms_body(self.args.goal) if is_sms_goal(self.args.goal) else None
+        if body and not self.sms_body_typed(body):
+            # The model picked the recipient then handed off, leaving an empty draft — and (we saw)
+            # often insists the body is already on screen. The app's own history says it was never
+            # typed, so trust that, not the model's reading.
+            if self.sms_body_replans < 2:
+                self.sms_body_replans += 1
+                # This redirect reuses the request_user action; keep the loop guard from mistaking it
+                # for a stuck loop so the model gets its turns to actually type the body.
+                self.loops.repeated = 0
+                self.loops.prior_fingerprint = None
+                self.replan(event, step, action, "sms_body_missing", told=(
+                    f"系统核对了草稿：短信正文还没写进去——你只填了收件人，正文是空的。屏幕看起来可能像"
+                    f"有正文，但实际没有，请以系统核对为准。现在点消息输入框，把正文『{body}』完整输入，"
+                    "再用 Take_over 交接。"))
+                return None
+            # It will not type the body; hand off honestly rather than claim a complete draft.
+            arguments = {**arguments, "message": (f"草稿只填了收件人，正文『{body}』没能写进去"
+                         "（模型误以为已填好）。请在主屏手动补上正文后再发送。")}
         emit_progress("paused", step + 1, self.args.max_steps)
         event["result"] = "awaiting_user"
         self.log.event(event)
@@ -545,12 +588,21 @@ class AgentSession:
             return self.pause(event, step, message, result="blocked_mail_control", executed=False, error=str(error))
         except SMSControlBlocked:
             event["executed"] = False
-            if not controller.sms_task or self.sms_replans >= 2:
+            if not controller.sms_task or self.sms_replans >= 3:
                 event["result"] = "blocked_unknown_control"
                 self.log.event(event)
                 raise AgentError("SMS safety guard: unknown control replan limit reached; no click performed")
             self.sms_replans += 1
-            self.replan(event, step, action, "blocked_unknown_control")
+            # A bare result code left the model repeating the same blocked tap. Tell it what was
+            # rejected and the exact compose flow, so it moves off the search bar / a non-existent
+            # conversation instead of tapping the same spot until the limit.
+            self.replan(event, step, action, "blocked_unknown_control", told=(
+                "That tap was NOT performed: it is not part of the Messages compose flow (a search "
+                "box, an existing conversation, or an unknown control). Do NOT tap that spot again. "
+                "There is no existing conversation to open. To write a new SMS: 1) tap the "
+                "'Start chat' / new-message button (the pencil or ＋, near the bottom) to open the "
+                "composer; 2) type the recipient name in the 'To' field; 3) tap the matching contact "
+                "in the suggestion list; 4) tap the message body and type the text. Never tap Send."))
             return None
         except AgentError as error:
             event.update({"result": "blocked", "error": str(error)})

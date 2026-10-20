@@ -49,6 +49,18 @@ def is_sms_goal(goal: str) -> bool:
         r"(?:Google\s+)?Messages?\b", goal, re.I))
 
 
+def expected_sms_body(goal: str) -> str | None:
+    """The message body an SMS draft must contain, taken from the quoted text in the request.
+
+    Used to stop a premature hand-off before the body is typed. Only the clearly-quoted body is
+    returned (the recipient is never quoted); an unquoted request returns None, so no false guard.
+    """
+    match = re.search(r"『([^』]+)』|「([^」]+)」|“([^”]+)”|\"([^\"]+)\"|'([^']+)'", goal)
+    if match:
+        return next(group for group in match.groups() if group)
+    return None
+
+
 def is_sms_open_only(goal: str) -> bool:
     return bool(re.fullmatch(r"\s*(?:请\s*)?(?:打开|启动|进入|open|launch)\s*(?:一下\s*)?"
                             r"(?:短信|短信息|SMS|(?:Google\s+)?Messages?)[。.!！\s]*", goal, re.I))
@@ -125,3 +137,68 @@ def is_mail_to_calendar(goal: str) -> bool:
     """Read an email and put what it describes into the calendar."""
     return bool(re.search(r"(?:邮件|邮箱|\be-?mail\b|\bgmail\b).*(?:加到|添加到|加进|放到|放进|记到|写到|写进|同步到|存到).*(?:日历|日程)",
                           goal, re.I))
+
+
+# Sequence words that join "first do X, THEN do Y"; longest first so a match consumes
+# the whole connective phrase (e.g. prefer "然后再去" over "然后").
+_CONNECTORS = sorted((
+    "然后再帮我去", "然后再帮我", "然后再去", "然后帮我去", "然后帮我", "然后再", "然后去", "然后",
+    "接着再帮我去", "接着再去", "接着去", "接着帮我", "接着", "随后再去", "随后去", "随后",
+    "之后再帮我去", "之后再去", "之后去", "之后再", "之后", "再帮我去", "再帮我", "再去", "最后再", "最后",
+), key=len, reverse=True)
+_SEQUENCE = re.compile(r"[，,。；;、\s]*(?:" + "|".join(_CONNECTORS) + r")[，,：:、\s]*")
+# Quoted message bodies: a connector inside the drafted text is not a task boundary.
+_QUOTED = re.compile(r"『[^』]*』|「[^」]*」|“[^”]*”|‘[^’]*’|\"[^\"]*\"|'[^']*'")
+_TRIM = " 　，,。.；;、:："
+
+
+def split_composite_goal(goal: str) -> tuple[str, str | None]:
+    """Split a "draft first, THEN another task" request into (first, rest).
+
+    Only a request whose FIRST part is an SMS or mail *draft* is split, because
+    only a draft pauses for an owner takeover and so would otherwise strand the
+    rest of the goal. After the owner takes the draft to the main screen, the
+    bridge continues with `rest` on the private display. A generic multi-step
+    goal (no leading draft) is left whole for the model to work through in one
+    run, so this returns (goal, None).
+    """
+    if is_mail_to_calendar(goal):
+        return goal, None
+    spans = [m.span() for m in _QUOTED.finditer(goal)]
+    for match in _SEQUENCE.finditer(goal):
+        if any(start <= match.start() < end for start, end in spans):
+            continue  # the connector sits inside the drafted message, not between tasks
+        first = goal[: match.start()].strip(_TRIM)
+        rest = goal[match.end():].strip(_TRIM)
+        if len(rest) < 2 or not first:
+            continue
+        if is_sms_goal(first) or is_mail_compose_goal(first):
+            return first, rest
+    return goal, None
+
+
+def draft_phase_goal(full: str, leg: str) -> str:
+    """First leg of a composite "draft THEN more" task: complete the draft fully, then hand off.
+
+    The primary instruction is the draft leg alone (so the body stays prominent and the model does
+    not rush past it); the whole request follows as context so the task still reads as connected.
+    Leading with the full request made the model select the recipient and hand off without the body.
+    """
+    return (mail_draft_goal(sms_draft_goal(leg)) +
+            " （这是一条连续任务的第一步。完整任务：" + full + "。现在只、且完整地做好这条短信/邮件草稿——"
+            "收件人和正文都要填好，再 Take_over 交接；后面的部分（例如去 12306 订票）会在你交接之后"
+            "自动继续，不要现在就去做，也不要因为后面还有任务就跳过正文或提前交接。）")
+
+
+def continuation_goal(full: str, rest: str) -> str:
+    """Model instructions for the SECOND leg of a composite task, keeping the whole request in view.
+
+    The draft was already prepared and handed to the owner's main screen, so this leg must not
+    reopen Messages/Gmail; it only finishes the remaining part. The full request is shown so the
+    task reads as one connected flow rather than a disconnected fragment.
+    """
+    return (
+        "这是一条连续任务的第二步。第一步的短信/邮件草稿已经准备好并交到主屏，由主人自己核对后手动发送——"
+        "不要再打开短信或 Messages/Gmail，也不要重复准备或发送它。现在只需完成这条任务剩下的部分："
+        + rest + "。（完整任务：" + full + "）"
+    )

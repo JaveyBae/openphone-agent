@@ -108,6 +108,16 @@ class TappedTextFieldTest(unittest.TestCase):
         self.assertIn("do not tap it again", user_text("写邮件", history, 720, 1280))
         self.assertNotIn("do not tap it again", user_text("写邮件", [{**history[0], "tapped_text_field": False}], 720, 1280))
 
+    def test_a_blocked_action_feedback_reaches_the_prompt(self):
+        # Without this, the model only saw the action list and repeated the same rejected tap.
+        from qwen_planner import user_text
+        told = "That tap was NOT performed: tap the 'Start chat' button to open the composer."
+        history = [{"action": {"action": "tap", "arguments": {"x": 1, "y": 1}}, "executed": False, "told": told}]
+        self.assertIn("Feedback: " + told, user_text("给李华发短信", history, 720, 1280))
+        # A normal executed action carries no such feedback line.
+        self.assertNotIn("Feedback:", user_text("给李华发短信",
+                         [{"action": {"action": "tap", "arguments": {"x": 1, "y": 1}}}], 720, 1280))
+
 class ReaderLeakTest(unittest.TestCase):
     def test_a_failed_read_closes_the_reader(self):
         session = agent_session.AgentSession.__new__(agent_session.AgentSession)
